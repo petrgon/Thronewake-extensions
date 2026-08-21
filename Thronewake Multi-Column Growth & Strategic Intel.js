@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      13.0
-// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, configurable number formatting (Raw vs Compact), 90-day Gist history, and Travian strategy modal.
+// @version      13.7
+// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, configurable number formatting & server speed multiplier (3x default), 90-day Gist history, intercepted Escape key modal closing, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -19,16 +19,51 @@
     const GIST_ID_KEY = 'tw_gist_id';
     const GIST_TOKEN_KEY = 'tw_gist_token';
     const NUMBER_FORMAT_KEY = 'tw_number_format';
+    const SERVER_SPEED_KEY = 'tw_server_speed';
+    const LOCAL_HISTORY_KEY = 'tw_local_history';
     const GIST_FILENAME = 'thronewake_leaderboard_history.json';
     
     const ONE_DAY_MS = 24 * 60 * 60 * 1000;
     const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;       // Window for inline % badge
     const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;     // Full server season retention (90 days)
 
+    // Load initial history from local storage fallback
     let gistHistory = {};
+    try {
+        const rawLocal = GM_getValue(LOCAL_HISTORY_KEY, '{}');
+        gistHistory = JSON.parse(rawLocal) || {};
+    } catch (e) {
+        gistHistory = {};
+    }
+
     let isGistLoaded = false;
     let syncTimeout = null;
     let activeChart = null;
+
+    function saveLocalHistory() {
+        GM_setValue(LOCAL_HISTORY_KEY, JSON.stringify(gistHistory));
+    }
+
+    // --- Global Hotkey Handlers (Intercepted Esc Key to Close Modals) ---
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const trendModal = document.getElementById('tw-trend-modal');
+            const gistModal = document.getElementById('tw-gist-modal');
+
+            const isTrendOpen = trendModal && trendModal.style.display !== 'none';
+            const isGistOpen = gistModal && gistModal.style.display !== 'none';
+
+            if (isTrendOpen || isGistOpen) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                if (isTrendOpen) trendModal.style.display = 'none';
+                if (isGistOpen) gistModal.style.display = 'none';
+            }
+        }
+    }, true);
 
     // --- Dynamic Number Formatting Helper (Raw vs Compact) ---
 
@@ -63,7 +98,9 @@
         const token = GM_getValue(GIST_TOKEN_KEY, '');
 
         if (!gistId || !token) {
+            isGistLoaded = true;
             if (callback) callback(false, 'Enter Gist ID & Token first');
+            processTable();
             return;
         }
 
@@ -89,11 +126,14 @@
                                     onload: function (rawRes) {
                                         if (rawRes.status === 200) {
                                             gistHistory = JSON.parse(rawRes.responseText);
+                                            saveLocalHistory();
                                             isGistLoaded = true;
                                             if (callback) callback(true);
                                             processTable();
-                                        } else if (callback) {
-                                            callback(false, 'Raw Stream Failed');
+                                        } else {
+                                            isGistLoaded = true;
+                                            if (callback) callback(false, 'Raw Stream Failed');
+                                            processTable();
                                         }
                                     }
                                 });
@@ -101,36 +141,43 @@
                             }
 
                             gistHistory = JSON.parse(fileObj.content);
+                            saveLocalHistory();
                             isGistLoaded = true;
                             if (callback) callback(true);
                             processTable();
                         } else {
-                            gistHistory = {};
                             isGistLoaded = true;
                             if (callback) callback(true);
+                            processTable();
                         }
                     } catch (e) {
                         console.error('Error parsing Gist JSON', e);
+                        isGistLoaded = true;
                         if (callback) callback(false, 'Invalid JSON in Gist');
+                        processTable();
                     }
-                } else if (response.status === 401) {
-                    if (callback) callback(false, '401 Unauthorized (Bad Token)');
-                } else if (response.status === 404) {
-                    if (callback) callback(false, '404 Gist ID Not Found');
                 } else {
+                    isGistLoaded = true;
                     if (callback) callback(false, `HTTP Error ${response.status}`);
+                    processTable();
                 }
             },
             onerror: function () {
+                isGistLoaded = true;
                 if (callback) callback(false, 'Network Error / Blocked');
+                processTable();
             },
             ontimeout: function () {
+                isGistLoaded = true;
                 if (callback) callback(false, 'Request Timed Out');
+                processTable();
             }
         });
     }
 
     function pushToGistDebounced() {
+        saveLocalHistory();
+
         if (syncTimeout) clearTimeout(syncTimeout);
         syncTimeout = setTimeout(() => {
             const gistId = GM_getValue(GIST_ID_KEY, '');
@@ -249,8 +296,9 @@
         return { symbol, status, gain24h, avgPriorDailyGain };
     }
 
-    // Travian Strategic Assessment
+    // Travian Strategic Assessment (Server Speed Adjusted)
     function getTravianStrategicIntel(playerName, currentValue, metricKey) {
+        const serverSpeed = parseFloat(GM_getValue(SERVER_SPEED_KEY, 3)) || 3;
         const pData = gistHistory[playerName] || {};
         const popHistory = pData['pop_population'] || [];
         const pvpAttHistory = pData['attack_pvp'] || [];
@@ -267,32 +315,32 @@
         let statusColor = "#334155";
         let tactic = "Player maintains an even ratio of eco growth and army expansion. Standard scouting advised.";
 
-        if (defGain24h > 100) {
+        if (defGain24h > (100 * serverSpeed)) {
             archetype = "💥 Decimated Defense (Heavy Losses)";
             statusBg = "#fce7f3";
             statusColor = "#9d174d";
             tactic = "Player suffered heavy troop casualties defending their village (defense points = lost own def-units). Defensive force is decimated—ideal target for immediate follow-up attack or chiefing!";
-        } else if (pvpGain24h > 100 && defGain24h < 20) {
+        } else if (pvpGain24h > (100 * serverSpeed) && defGain24h < (20 * serverSpeed)) {
             archetype = "⚔️ Unpunished Attacker";
             statusBg = "#fee2e2";
             statusColor = "#b91c1c";
             tactic = "Kills many enemy troops on attacks without facing counter-attacks. Has a strong hammer—prepare defense stacks for wave attacks.";
-        } else if (pvpGain24h > 50 && defGain24h > 50) {
+        } else if (pvpGain24h > (50 * serverSpeed) && defGain24h > (50 * serverSpeed)) {
             archetype = "🔥 Two-Way War";
             statusBg = "#ffedd5";
             statusColor = "#c2410c";
             tactic = "Heavy fighting on both sides—killing enemy units on offense while losing troops defending against incoming raids.";
-        } else if (popGain24h > 40 && pvpGain24h < 20 && defGain24h < 20) {
+        } else if (popGain24h > (40 * serverSpeed) && pvpGain24h < (20 * serverSpeed) && defGain24h < (20 * serverSpeed)) {
             archetype = "🏰 Eco Rusher (Simmer)";
             statusBg = "#dcfce7";
             statusColor = "#15803d";
             tactic = "Upgrading fields/buildings for new villages. Zero defensive losses or attack kills—prime target for catapults or chiefing before wall completion.";
-        } else if (popGain24h <= 5 && pvpGain24h > 100) {
+        } else if (popGain24h <= (5 * serverSpeed) && pvpGain24h > (100 * serverSpeed)) {
             archetype = "⚔️ Hammer Builder";
             statusBg = "#fee2e2";
             statusColor = "#b91c1c";
             tactic = "Population growth stalled while offensive points surged. Barracks/Stables running non-stop. Request defense stacks or plan a preventive strike.";
-        } else if (lootGain24h > 30000) {
+        } else if (lootGain24h > (30000 * serverSpeed)) {
             archetype = "🐎 Active Raider";
             statusBg = "#fef3c7";
             statusColor = "#b45309";
@@ -336,22 +384,53 @@
 
     function parseValue(text) {
         if (!text) return 0;
-        return parseInt(text.replace(/[^0-9]/g, ''), 10) || 0;
+        const clean = text.replace(/[\s\u00a0]+/g, '').trim();
+        const match = clean.match(/([\d\.,]+)\s*([kMbB]?)/);
+        if (!match) return 0;
+
+        let num = parseFloat(match[1].replace(/,/g, ''));
+        if (isNaN(num)) return 0;
+
+        const unit = match[2].toLowerCase();
+        if (unit === 'k') num *= 1000;
+        else if (unit === 'm') num *= 1000000;
+        else if (unit === 'b') num *= 1000000000;
+
+        return Math.round(num) || 0;
+    }
+
+    // --- Leaderboard Table Isolation ---
+
+    function findLeaderboardTable() {
+        const tables = document.querySelectorAll('table, [role="table"]');
+        for (const t of tables) {
+            if (t.querySelector('a[href*="player"], a[href*="user"], a[href*="alliance"], a[href*="/p/"]')) {
+                return t;
+            }
+        }
+        for (const t of tables) {
+            if (!t.getAttribute('aria-rowcount')) {
+                return t;
+            }
+        }
+        return null;
     }
 
     // --- Dynamic Column Mapping ---
 
     function getMetricsConfig(table) {
         const category = getActiveCategory();
-        const headerThs = Array.from(table.querySelectorAll('thead th'));
+        const headerThs = Array.from(table.querySelectorAll('thead th, th, [role="columnheader"]'));
         const config = [];
 
         headerThs.forEach((th, idx) => {
             const text = th.textContent.trim().toLowerCase();
-            if (text.includes('village')) {
+            if (text.includes('village') || text.includes('town')) {
                 config.push({ colIndex: idx + 1, key: 'pop_villages', label: 'Villages' });
-            } else if (text.includes('population')) {
-                config.push({ colIndex: idx + 1, key: 'pop_population', label: 'Population' });
+            } else if (text.includes('population') || text.includes('pop') || text.includes('score') || text.includes('points')) {
+                if (!text.includes('pvp') && !text.includes('pve') && !text.includes('attack') && !text.includes('defense') && !text.includes('loot')) {
+                    config.push({ colIndex: idx + 1, key: 'pop_population', label: 'Population' });
+                }
             } else if (text.includes('pvp')) {
                 config.push({ colIndex: idx + 1, key: category === 'defense' ? 'defense_pvp' : 'attack_pvp', label: 'PvP Points' });
             } else if (text.includes('pve')) {
@@ -379,7 +458,7 @@
     // --- DOM Inline Processing ---
 
     function processTable() {
-        const table = document.querySelector('table');
+        const table = findLeaderboardTable();
         if (!table) return;
 
         if (isWeeklySelected()) {
@@ -390,18 +469,20 @@
         const isAlliancePage = window.location.pathname.includes('/alliance');
         const now = Date.now();
 
-        const rows = table.querySelectorAll('tbody tr');
+        const rows = table.querySelectorAll('tbody tr, [role="row"]');
         if (rows.length === 0) return;
 
         const metricsConfig = getMetricsConfig(table);
         let hasNewData = false;
 
         rows.forEach(row => {
-            const tds = Array.from(row.querySelectorAll('td'));
-            const playerLink = row.querySelector('a[href*="/player/"]');
+            const tds = Array.from(row.querySelectorAll('td, [role="gridcell"]'));
+            const playerLink = row.querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="alliance"], a[href*="/p/"]') || tds[1]?.querySelector('a');
             if (!playerLink) return;
 
             const playerName = playerLink.textContent.trim();
+            if (!playerName) return;
+
             if (!gistHistory[playerName]) gistHistory[playerName] = {};
 
             metricsConfig.forEach(m => {
@@ -455,7 +536,7 @@
 
                 const tooltipText = `${playerName} (${m.label}): ${growthText} over 3 days (${gain3dFormatted})\n${momentum.status} • Click for tactical analysis`;
 
-                const container = targetTd.querySelector('div.flex') || targetTd;
+                const container = targetTd.querySelector('div.flex, div, span') || targetTd;
                 let badge = container.querySelector('.tw-growth-badge');
                 if (!badge) {
                     badge = document.createElement('span');
@@ -463,7 +544,7 @@
                     container.appendChild(badge);
                 }
 
-                badge.style.cssText = `font-size: 12px; font-weight: 600; margin-left: 5px; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; ${colorStyle}`;
+                badge.style.cssText = `font-size: 11px; font-weight: 700; margin-left: 6px; display: inline-block; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; ${colorStyle}`;
                 badge.textContent = `(${growthText}${momentumSymbol})`;
                 badge.title = tooltipText;
 
@@ -474,6 +555,8 @@
                 };
             });
         });
+
+        saveLocalHistory();
 
         if (hasNewData && isGistLoaded && !isAlliancePage) {
             pushToGistDebounced();
@@ -540,12 +623,12 @@
             const minTime = daysLimit === 90 ? 0 : now - (daysLimit * ONE_DAY_MS);
             const filteredHistory = fullSortedHistory.filter(r => r.t >= minTime);
 
-            const isMultiDay = (daysLimit > 3);
+            const isLongRange = (daysLimit > 7);
             const labels = filteredHistory.map(r => {
                 const d = new Date(r.t);
-                return isMultiDay
+                return isLongRange
                     ? `${d.getMonth() + 1}/${d.getDate()}`
-                    : `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${d.getMinutes().toString().padStart(2, '0')}`;
+                    : `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
             });
             const values = filteredHistory.map(r => r.v);
 
@@ -577,6 +660,19 @@
                         legend: { display: false },
                         tooltip: {
                             callbacks: {
+                                title: function(context) {
+                                    if (!context || !context.length) return '';
+                                    const idx = context[0].dataIndex;
+                                    const item = filteredHistory[idx];
+                                    if (!item) return '';
+                                    const d = new Date(item.t);
+                                    const month = d.getMonth() + 1;
+                                    const day = d.getDate();
+                                    const year = d.getFullYear();
+                                    const hours = d.getHours().toString().padStart(2, '0');
+                                    const mins = d.getMinutes().toString().padStart(2, '0');
+                                    return `${month}/${day}/${year} ${hours}:${mins}`;
+                                },
                                 label: function(context) {
                                     return `${metricLabel}: ${formatCompact(context.raw)}`;
                                 }
@@ -667,6 +763,7 @@
         `;
 
         const currentFormat = GM_getValue(NUMBER_FORMAT_KEY, 'raw');
+        const currentSpeed = GM_getValue(SERVER_SPEED_KEY, 3);
 
         modal.innerHTML = `
             <div style="background: #ece8d6; border: 2px solid #101010; padding: 18px; width: 340px; border-radius: 4px; color: #101010; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
@@ -678,6 +775,17 @@
                 <div style="margin-bottom: 10px;">
                     <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">GitHub Token (ghp_...)</label>
                     <input type="password" id="tw-input-gist-token" value="${GM_getValue(GIST_TOKEN_KEY, '')}" placeholder="ghp_YOUR_TOKEN" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;" />
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Server Speed</label>
+                    <select id="tw-select-server-speed" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;">
+                        <option value="1" ${parseFloat(currentSpeed) === 1 ? 'selected' : ''}>1x</option>
+                        <option value="2" ${parseFloat(currentSpeed) === 2 ? 'selected' : ''}>2x</option>
+                        <option value="3" ${parseFloat(currentSpeed) === 3 ? 'selected' : ''}>3x (Default)</option>
+                        <option value="4" ${parseFloat(currentSpeed) === 4 ? 'selected' : ''}>4x</option>
+                        <option value="5" ${parseFloat(currentSpeed) === 5 ? 'selected' : ''}>5x</option>
+                        <option value="10" ${parseFloat(currentSpeed) === 10 ? 'selected' : ''}>10x</option>
+                    </select>
                 </div>
                 <div style="margin-bottom: 12px;">
                     <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Number Formatting</label>
@@ -712,6 +820,7 @@
         document.getElementById('tw-btn-reset-modal').onclick = () => {
             if (confirm('Are you sure you want to clear all recorded player history? Your Gist ID and Token will be kept.')) {
                 gistHistory = {};
+                saveLocalHistory();
 
                 document.querySelectorAll('.tw-growth-badge').forEach(b => b.remove());
 
@@ -726,11 +835,13 @@
             const gistId = document.getElementById('tw-input-gist-id').value.trim();
             const token = document.getElementById('tw-input-gist-token').value.trim();
             const numFormat = document.getElementById('tw-select-num-format').value;
+            const serverSpeed = parseFloat(document.getElementById('tw-select-server-speed').value) || 3;
             const statusEl = document.getElementById('tw-gist-status');
 
             GM_setValue(GIST_ID_KEY, gistId);
             GM_setValue(GIST_TOKEN_KEY, token);
             GM_setValue(NUMBER_FORMAT_KEY, numFormat);
+            GM_setValue(SERVER_SPEED_KEY, serverSpeed);
 
             statusEl.textContent = 'Pulling remote data...';
             pullFromGist((success, err) => {
@@ -752,10 +863,7 @@
         if (timeout) clearTimeout(timeout);
         timeout = setTimeout(() => {
             injectConfigButton();
-            const table = document.querySelector('table');
-            if (table) {
-                processTable();
-            }
+            processTable();
         }, 150);
     });
 
