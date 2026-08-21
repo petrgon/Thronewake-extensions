@@ -1,0 +1,374 @@
+// ==UserScript==
+// @name         Top-Left Persistent Notepad (Cloud Config)
+// @namespace    violentmonkey-persistent-notes
+// @version      3.4
+// @description  Per-village persistent notes for Thronewake with clickable status to open GitHub Gist and notepad header icon.
+// @match        *://*.thronewake.com/*
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  // =========================================================================
+  // USER CONFIGURATION CONSTANTS
+  // =========================================================================
+  const CONFIG = {
+    // Choose provider: "JSONBIN" | "GITHUB_GIST" | "CUSTOM_REST"
+    SYNC_PROVIDER: "GITHUB_GIST",
+    
+    // API Endpoint URL
+    API_URL: "https://api.github.com/gists/GIST_ID",
+
+    // API Secret Token / Key
+    API_KEY: "ghp_PASTE_YOUR_GENERATED_TOKEN_HERE",
+
+    // Debounce time in ms before saving notes after typing stops
+    DEBOUNCE_DELAY_MS: 1000
+  };
+  // =========================================================================
+
+  if (document.getElementById("persistent-notes-widget")) return;
+
+  GM_addStyle(`
+    #persistent-notes-widget {
+      position: fixed;
+      width: 260px;
+      height: 200px;
+      min-width: 180px;
+      min-height: 100px;
+      max-width: 80vw;
+      max-height: 80vh;
+      z-index: 999999;
+      background-color: #ece8d6;
+      color: #101010;
+      border: 2px solid #101010;
+      border-radius: 4px;
+      box-shadow: inset 0 0 10px rgba(16, 16, 16, 0.3), 0 4px 14px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+      resize: both;
+      box-sizing: border-box;
+    }
+
+    #persistent-notes-header {
+      background-color: #6a5a48;
+      color: #dcd3c6;
+      padding: 0 8px;
+      height: 32px;
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.025em;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      user-select: none;
+      cursor: move;
+      white-space: nowrap;
+      border-bottom: 2px solid #101010;
+      box-sizing: border-box;
+      flex-shrink: 0;
+    }
+
+    #persistent-notes-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-right: 6px;
+    }
+
+    #persistent-notes-status {
+      font-size: 10px;
+      margin-right: 6px;
+      opacity: 0.85;
+      cursor: pointer;
+      transition: opacity 0.15s ease;
+    }
+
+    #persistent-notes-status:hover {
+      opacity: 1;
+      text-decoration: underline;
+    }
+
+    #persistent-notes-textarea {
+      flex: 1;
+      width: 100%;
+      border: none;
+      padding: 10px;
+      background-color: #f8f4e6;
+      color: #101010;
+      resize: none;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.5;
+      outline: none;
+      box-sizing: border-box;
+      font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    #persistent-notes-toggle {
+      background-color: #165eb9;
+      border: 1px solid #101010;
+      border-radius: 50%;
+      color: #dcd3c6;
+      cursor: pointer;
+      width: 18px;
+      height: 18px;
+      min-width: 18px;
+      min-height: 18px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: bold;
+      line-height: 1;
+      padding: 0;
+    }
+
+    #persistent-notes-toggle:hover {
+      background-color: #124993;
+    }
+
+    /* Fixed collapsed state dimensions */
+    .pn-minimized {
+      height: 32px !important;
+      min-height: 32px !important;
+      width: 150px !important;
+      min-width: 150px !important;
+      resize: none !important;
+    }
+
+    .pn-minimized #persistent-notes-header {
+      border-bottom: none;
+    }
+
+    .pn-minimized #persistent-notes-status {
+      display: none;
+    }
+
+    .pn-minimized #persistent-notes-textarea {
+      display: none !important;
+    }
+  `);
+
+  let allNotes = {};
+  let saveDebounceTimer = null;
+
+  function getVillageInfo() {
+    const select = document.querySelector('select[aria-label="Switch village"]');
+    if (select && select.options.length > 0) {
+      const selectedOption = select.options[select.selectedIndex] || select.querySelector('option[selected]');
+      if (selectedOption) {
+        return {
+          id: selectedOption.value || selectedOption.textContent.trim(),
+          name: selectedOption.textContent.trim()
+        };
+      }
+    }
+    const comboSpan = document.querySelector('div[role="combobox"][aria-label="Switch village"] span');
+    if (comboSpan && comboSpan.textContent.trim()) {
+      const text = comboSpan.textContent.trim();
+      return { id: text, name: text };
+    }
+    return { id: "global", name: "Global" };
+  }
+
+  const container = document.createElement("div");
+  container.id = "persistent-notes-widget";
+  container.style.top = GM_getValue("pn_top", "60px");
+  container.style.left = GM_getValue("pn_left", "12px");
+  container.style.width = GM_getValue("pn_width", "260px");
+  container.style.height = GM_getValue("pn_height", "200px");
+
+  const header = document.createElement("div");
+  header.id = "persistent-notes-header";
+
+  const title = document.createElement("span");
+  title.id = "persistent-notes-title";
+
+  const status = document.createElement("span");
+  status.id = "persistent-notes-status";
+  status.textContent = "⌛ Loading...";
+  status.title = "Click to open Gist in browser";
+
+  // Click handler to open GitHub Gist in a new tab
+  status.addEventListener("click", (e) => {
+    e.stopPropagation();
+    let webUrl = CONFIG.API_URL;
+    if (CONFIG.SYNC_PROVIDER === "GITHUB_GIST") {
+      webUrl = CONFIG.API_URL.replace("api.github.com/gists", "gist.github.com");
+    }
+    window.open(webUrl, "_blank");
+  });
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.id = "persistent-notes-toggle";
+  toggleBtn.textContent = "—";
+
+  const rightGroup = document.createElement("div");
+  rightGroup.style.display = "flex";
+  rightGroup.style.alignItems = "center";
+  rightGroup.appendChild(status);
+  rightGroup.appendChild(toggleBtn);
+
+  header.appendChild(title);
+  header.appendChild(rightGroup);
+
+  const textarea = document.createElement("textarea");
+  textarea.id = "persistent-notes-textarea";
+
+  container.appendChild(header);
+  container.appendChild(textarea);
+  document.body.appendChild(container);
+
+  let currentVillage = getVillageInfo();
+
+  function getRequestHeaders() {
+    const headers = { "Content-Type": "application/json" };
+    if (CONFIG.SYNC_PROVIDER === "JSONBIN") {
+      headers["X-Master-Key"] = CONFIG.API_KEY;
+    } else if (CONFIG.SYNC_PROVIDER === "GITHUB_GIST" || CONFIG.SYNC_PROVIDER === "CUSTOM_REST") {
+      headers["Authorization"] = CONFIG.API_KEY.startsWith("Bearer ") ? CONFIG.API_KEY : `Bearer ${CONFIG.API_KEY}`;
+    }
+    return headers;
+  }
+
+  function fetchCloudNotes() {
+    if (CONFIG.API_URL.includes("YOUR_") || CONFIG.API_KEY.includes("YOUR_")) {
+      status.textContent = "⚠️ Config Needed";
+      loadVillageNotes(currentVillage);
+      return;
+    }
+
+    GM_xmlhttpRequest({
+      method: "GET",
+      url: CONFIG.SYNC_PROVIDER === "JSONBIN" && !CONFIG.API_URL.endsWith("/latest") ? `${CONFIG.API_URL}/latest` : CONFIG.API_URL,
+      headers: getRequestHeaders(),
+      onload: function (response) {
+        if (response.status === 200) {
+          const res = JSON.parse(response.responseText);
+          if (CONFIG.SYNC_PROVIDER === "JSONBIN") {
+            allNotes = res.record || {};
+          } else if (CONFIG.SYNC_PROVIDER === "GITHUB_GIST") {
+            const file = res.files["thronewake_notes.json"];
+            allNotes = file ? JSON.parse(file.content) : {};
+          } else {
+            allNotes = res || {};
+          }
+          status.textContent = "☁️ Synced";
+          loadVillageNotes(currentVillage);
+        } else {
+          status.textContent = "❌ Sync Error";
+        }
+      },
+      onerror: function () {
+        status.textContent = "❌ Offline";
+      }
+    });
+  }
+
+  function pushCloudNotes() {
+    if (CONFIG.API_URL.includes("YOUR_") || CONFIG.API_KEY.includes("YOUR_")) return;
+
+    status.textContent = "⏳ Saving...";
+    let bodyData;
+
+    if (CONFIG.SYNC_PROVIDER === "GITHUB_GIST") {
+      bodyData = JSON.stringify({
+        files: {
+          "thronewake_notes.json": { content: JSON.stringify(allNotes, null, 2) }
+        }
+      });
+    } else {
+      bodyData = JSON.stringify(allNotes);
+    }
+
+    GM_xmlhttpRequest({
+      method: CONFIG.SYNC_PROVIDER === "GITHUB_GIST" ? "PATCH" : "PUT",
+      url: CONFIG.API_URL,
+      headers: getRequestHeaders(),
+      data: bodyData,
+      onload: function (response) {
+        if (response.status === 200) {
+          status.textContent = "☁️ Synced";
+        } else {
+          status.textContent = "❌ Save Error";
+        }
+      }
+    });
+  }
+
+  function loadVillageNotes(village) {
+    currentVillage = village;
+    const shortName = village.name.replace(/\s*\(-?\d+\|-?\d+\)/, '');
+    title.textContent = `📝 ${shortName}`;
+    textarea.placeholder = `Notes for ${shortName}...`;
+    textarea.value = allNotes[village.id] || "";
+  }
+
+  fetchCloudNotes();
+
+  if (GM_getValue("pn_minimized", false)) {
+    container.classList.add("pn-minimized");
+    toggleBtn.textContent = "+";
+  }
+
+  textarea.addEventListener("input", () => {
+    allNotes[currentVillage.id] = textarea.value;
+    status.textContent = "✏️ Typing...";
+    clearTimeout(saveDebounceTimer);
+    saveDebounceTimer = setTimeout(pushCloudNotes, CONFIG.DEBOUNCE_DELAY_MS);
+  });
+
+  setInterval(() => {
+    const activeVillage = getVillageInfo();
+    if (activeVillage.id !== currentVillage.id) {
+      loadVillageNotes(activeVillage);
+    }
+  }, 500);
+
+  toggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const minState = container.classList.toggle("pn-minimized");
+    toggleBtn.textContent = minState ? "+" : "—";
+    GM_setValue("pn_minimized", minState);
+  });
+
+  const resizeObserver = new ResizeObserver(() => {
+    if (!container.classList.contains("pn-minimized")) {
+      GM_setValue("pn_width", container.style.width || `${container.offsetWidth}px`);
+      GM_setValue("pn_height", container.style.height || `${container.offsetHeight}px`);
+    }
+  });
+  resizeObserver.observe(container);
+
+  let isDragging = false, offsetX = 0, offsetY = 0;
+
+  header.addEventListener("mousedown", (e) => {
+    if (e.target === toggleBtn || e.target === status) return;
+    isDragging = true;
+    offsetX = e.clientX - container.offsetLeft;
+    offsetY = e.clientY - container.offsetTop;
+  });
+
+  document.addEventListener("mousemove", (e) => {
+    if (!isDragging) return;
+    container.style.left = Math.max(0, e.clientX - offsetX) + "px";
+    container.style.top = Math.max(0, e.clientY - offsetY) + "px";
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (isDragging) {
+      isDragging = false;
+      GM_setValue("pn_top", container.style.top);
+      GM_setValue("pn_left", container.style.left);
+    }
+  });
+})();
