@@ -3,7 +3,6 @@ Several extensions into Thronewake game
 
 ## How to install any extension
 1. Download ViolentMonkey, GreasyMonkey or TamperMonkey that allows you to install extensions.
-  * I found only TamperMonkey to work on iOS
 1. Open any script here, click on `raw` button to get the raw link.
 2. Go to app settings, find `Install from URL` and type there the link from previous step.
   
