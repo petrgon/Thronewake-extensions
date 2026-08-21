@@ -1,9 +1,8 @@
 // ==UserScript==
-// @name         Persistent Notepad for Thronewake
+// @name         Top-Left Persistent Notepad (Mobile Drag & Resize)
 // @namespace    violentmonkey-persistent-notes
-// @version      4.1
-// @author       Petr Gondek
-// @description  Per-village persistent notes synced with GitHub Gist. Features an in-app settings modal for mobile friendliness.
+// @version      4.2
+// @description  Per-village persistent notes synced with GitHub Gist. Features full mobile touch drag, touch resize handle, and settings modal.
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -23,7 +22,7 @@
       height: 200px;
       min-width: 180px;
       min-height: 100px;
-      max-width: 80vw;
+      max-width: 85vw;
       max-height: 80vh;
       z-index: 999999;
       background-color: #ece8d6;
@@ -35,8 +34,8 @@
       flex-direction: column;
       font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       overflow: hidden;
-      resize: both;
       box-sizing: border-box;
+      touch-action: none;
     }
 
     #persistent-notes-header {
@@ -57,6 +56,7 @@
       border-bottom: 2px solid #101010;
       box-sizing: border-box;
       flex-shrink: 0;
+      touch-action: none;
     }
 
     #persistent-notes-title {
@@ -128,6 +128,7 @@
       width: 100%;
       border: none;
       padding: 10px;
+      padding-bottom: 18px;
       background-color: #f8f4e6;
       color: #101010;
       resize: none;
@@ -183,12 +184,36 @@
       margin-top: 4px;
     }
 
+    /* Mobile-friendly Resize Handle */
+    #persistent-notes-resize-handle {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 22px;
+      height: 22px;
+      cursor: nwse-resize;
+      touch-action: none;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+
+    #persistent-notes-resize-handle::after {
+      content: "◢";
+      font-size: 11px;
+      color: #6a5a48;
+      position: absolute;
+      bottom: 2px;
+      right: 3px;
+    }
+
     .pn-minimized {
       height: 32px !important;
       min-height: 32px !important;
       width: 150px !important;
       min-width: 150px !important;
-      resize: none !important;
     }
 
     .pn-minimized #persistent-notes-header {
@@ -198,7 +223,8 @@
     .pn-minimized #persistent-notes-status,
     .pn-minimized #pn-settings-btn,
     .pn-minimized #persistent-notes-textarea,
-    .pn-minimized #persistent-notes-settings {
+    .pn-minimized #persistent-notes-settings,
+    .pn-minimized #persistent-notes-resize-handle {
       display: none !important;
     }
   `);
@@ -290,9 +316,14 @@
     <button type="button" id="pn-save-settings">Save & Sync</button>
   `;
 
+  const resizeHandle = document.createElement("div");
+  resizeHandle.id = "persistent-notes-resize-handle";
+  resizeHandle.title = "Drag to resize";
+
   container.appendChild(header);
   container.appendChild(textarea);
   container.appendChild(settingsPanel);
+  container.appendChild(resizeHandle);
   document.body.appendChild(container);
 
   let currentVillage = getVillageInfo();
@@ -307,7 +338,7 @@
   document.getElementById("pn-save-settings").addEventListener("click", () => {
     const newGist = document.getElementById("pn-input-gist").value.trim();
     const newKey = document.getElementById("pn-input-key").value.trim();
-
+    
     GM_setValue("pn_gist_id", newGist);
     GM_setValue("pn_api_key", newKey);
 
@@ -417,34 +448,101 @@
     GM_setValue("pn_minimized", minState);
   });
 
-  const resizeObserver = new ResizeObserver(() => {
-    if (!container.classList.contains("pn-minimized")) {
-      GM_setValue("pn_width", container.style.width || `${container.offsetWidth}px`);
-      GM_setValue("pn_height", container.style.height || `${container.offsetHeight}px`);
-    }
-  });
-  resizeObserver.observe(container);
+  // =========================================================================
+  // TOUCH & MOUSE DRAGGING LOGIC
+  // =========================================================================
+  let isDragging = false, dragOffsetX = 0, dragOffsetY = 0;
 
-  let isDragging = false, offsetX = 0, offsetY = 0;
-
-  header.addEventListener("mousedown", (e) => {
-    if (e.target === toggleBtn || e.target === status || e.target === settingsBtn) return;
+  function startDrag(clientX, clientY) {
     isDragging = true;
-    offsetX = e.clientX - container.offsetLeft;
-    offsetY = e.clientY - container.offsetTop;
-  });
+    dragOffsetX = clientX - container.offsetLeft;
+    dragOffsetY = clientY - container.offsetTop;
+  }
 
-  document.addEventListener("mousemove", (e) => {
+  function moveDrag(clientX, clientY) {
     if (!isDragging) return;
-    container.style.left = Math.max(0, e.clientX - offsetX) + "px";
-    container.style.top = Math.max(0, e.clientY - offsetY) + "px";
-  });
+    container.style.left = Math.max(0, clientX - dragOffsetX) + "px";
+    container.style.top = Math.max(0, clientY - dragOffsetY) + "px";
+  }
 
-  document.addEventListener("mouseup", () => {
+  function stopDrag() {
     if (isDragging) {
       isDragging = false;
       GM_setValue("pn_top", container.style.top);
       GM_setValue("pn_left", container.style.left);
     }
+  }
+
+  header.addEventListener("mousedown", (e) => {
+    if (e.target === toggleBtn || e.target === status || e.target === settingsBtn) return;
+    startDrag(e.clientX, e.clientY);
   });
+
+  header.addEventListener("touchstart", (e) => {
+    if (e.target === toggleBtn || e.target === status || e.target === settingsBtn) return;
+    const touch = e.touches[0];
+    startDrag(touch.clientX, touch.clientY);
+  }, { passive: true });
+
+  document.addEventListener("mousemove", (e) => moveDrag(e.clientX, e.clientY));
+  document.addEventListener("touchmove", (e) => {
+    if (isDragging) {
+      e.preventDefault();
+      moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  }, { passive: false });
+
+  document.addEventListener("mouseup", stopDrag);
+  document.addEventListener("touchend", stopDrag);
+
+  // =========================================================================
+  // TOUCH & MOUSE RESIZING LOGIC
+  // =========================================================================
+  let isResizing = false, resizeStartW = 0, resizeStartH = 0, resizeStartX = 0, resizeStartY = 0;
+
+  function startResize(clientX, clientY) {
+    isResizing = true;
+    resizeStartX = clientX;
+    resizeStartY = clientY;
+    resizeStartW = container.offsetWidth;
+    resizeStartH = container.offsetHeight;
+  }
+
+  function moveResize(clientX, clientY) {
+    if (!isResizing) return;
+    const newW = Math.max(180, resizeStartW + (clientX - resizeStartX));
+    const newH = Math.max(100, resizeStartH + (clientY - resizeStartY));
+    container.style.width = newW + "px";
+    container.style.height = newH + "px";
+  }
+
+  function stopResize() {
+    if (isResizing) {
+      isResizing = false;
+      GM_setValue("pn_width", container.style.width);
+      GM_setValue("pn_height", container.style.height);
+    }
+  }
+
+  resizeHandle.addEventListener("mousedown", (e) => {
+    e.stopPropagation();
+    startResize(e.clientX, e.clientY);
+  });
+
+  resizeHandle.addEventListener("touchstart", (e) => {
+    e.stopPropagation();
+    const touch = e.touches[0];
+    startResize(touch.clientX, touch.clientY);
+  }, { passive: true });
+
+  document.addEventListener("mousemove", (e) => moveResize(e.clientX, e.clientY));
+  document.addEventListener("touchmove", (e) => {
+    if (isResizing) {
+      e.preventDefault();
+      moveResize(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  }, { passive: false });
+
+  document.addEventListener("mouseup", stopResize);
+  document.addEventListener("touchend", stopResize);
 })();
