@@ -57,3 +57,21 @@ A moveable, resizable cloud-synced notepad overlay for in-game planning and vill
 <p align="left">
   <img width="460" alt="Persistent Notepad" src="https://github.com/user-attachments/assets/b1be3c46-df45-4037-9bcd-1337986dea9d" />
 </p>
+
+---
+
+### 4. [Thronewake Map Travel Time Calculator](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Map%20Travel%20Time%20Calculator.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20Map%20Travel%20Time%20Calculator.js))
+An interactive travel duration, distance, and UTC arrival time calculator built directly into the Thronewake map interface.
+
+* **Interactive Map Picking**: Pick Origin and Target coordinates directly from map tiles with z-index floating labels and pan-aware click interception.
+* **Piecewise Travel Math**: Accurately models Server Speed (2x default), Bannerfield scaling (>20 tiles), Local Influence (final 25% boost), and research bonuses.
+* **Smart Hotkeys**: Single-key shortcuts for picking coordinates (`O`/`T`) and switching factions (`E`/`V`/`S`).
+* **Persistent Settings**: Saves active faction, research levels, building modifiers, and layout preferences automatically across sessions.
+
+<p align="left">
+  <img width="460" alt="Thronewake Map Travel Time Calculator" src="YOUR_IMAGE_URL_HERE" />
+</p>
+
+<p align="left">
+  <img width="731" height="821" alt="image" src="https://github.com/user-attachments/assets/76a339d8-2c57-4fe1-a348-61c9443db570" />
+</p>
