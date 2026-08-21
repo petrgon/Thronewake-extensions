@@ -1,8 +1,9 @@
 // ==UserScript==
-// @name         Top-Left Persistent Notepad (Cloud Config)
+// @name         Persistent Notepad for Thronewake
 // @namespace    violentmonkey-persistent-notes
-// @version      3.4
-// @description  Per-village persistent notes for Thronewake with clickable status to open GitHub Gist and notepad header icon.
+// @version      4.1
+// @author       Petr Gondek
+// @description  Per-village persistent notes synced with GitHub Gist. Features an in-app settings modal for mobile friendliness.
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -12,24 +13,6 @@
 
 (function () {
   'use strict';
-
-  // =========================================================================
-  // USER CONFIGURATION CONSTANTS
-  // =========================================================================
-  const CONFIG = {
-    // Choose provider: "JSONBIN" | "GITHUB_GIST" | "CUSTOM_REST"
-    SYNC_PROVIDER: "GITHUB_GIST",
-    
-    // API Endpoint URL
-    API_URL: "https://api.github.com/gists/GIST_ID",
-
-    // API Secret Token / Key
-    API_KEY: "ghp_PASTE_YOUR_GENERATED_TOKEN_HERE",
-
-    // Debounce time in ms before saving notes after typing stops
-    DEBOUNCE_DELAY_MS: 1000
-  };
-  // =========================================================================
 
   if (document.getElementById("persistent-notes-widget")) return;
 
@@ -83,9 +66,14 @@
       margin-right: 6px;
     }
 
+    .pn-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
     #persistent-notes-status {
       font-size: 10px;
-      margin-right: 6px;
       opacity: 0.85;
       cursor: pointer;
       transition: opacity 0.15s ease;
@@ -96,20 +84,19 @@
       text-decoration: underline;
     }
 
-    #persistent-notes-textarea {
-      flex: 1;
-      width: 100%;
+    .pn-icon-btn {
+      background: none;
       border: none;
-      padding: 10px;
-      background-color: #f8f4e6;
-      color: #101010;
-      resize: none;
-      font-size: 14px;
-      font-weight: 500;
-      line-height: 1.5;
-      outline: none;
-      box-sizing: border-box;
-      font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #dcd3c6;
+      cursor: pointer;
+      font-size: 12px;
+      padding: 0 2px;
+      opacity: 0.8;
+      line-height: 1;
+    }
+
+    .pn-icon-btn:hover {
+      opacity: 1;
     }
 
     #persistent-notes-toggle {
@@ -136,7 +123,66 @@
       background-color: #124993;
     }
 
-    /* Fixed collapsed state dimensions */
+    #persistent-notes-textarea {
+      flex: 1;
+      width: 100%;
+      border: none;
+      padding: 10px;
+      background-color: #f8f4e6;
+      color: #101010;
+      resize: none;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.5;
+      outline: none;
+      box-sizing: border-box;
+      font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    #persistent-notes-settings {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      background-color: #f8f4e6;
+      flex: 1;
+      box-sizing: border-box;
+    }
+
+    .pn-input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .pn-input-group label {
+      font-size: 10px;
+      font-weight: 700;
+      color: #6a5a48;
+      text-transform: uppercase;
+    }
+
+    .pn-input-group input {
+      border: 1px solid #101010;
+      border-radius: 3px;
+      padding: 4px;
+      font-size: 12px;
+      background: #ece8d6;
+      color: #101010;
+    }
+
+    #pn-save-settings {
+      background-color: #165eb9;
+      color: #fff;
+      border: 1px solid #101010;
+      border-radius: 3px;
+      padding: 5px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 4px;
+    }
+
     .pn-minimized {
       height: 32px !important;
       min-height: 32px !important;
@@ -149,17 +195,19 @@
       border-bottom: none;
     }
 
-    .pn-minimized #persistent-notes-status {
-      display: none;
-    }
-
-    .pn-minimized #persistent-notes-textarea {
+    .pn-minimized #persistent-notes-status,
+    .pn-minimized #pn-settings-btn,
+    .pn-minimized #persistent-notes-textarea,
+    .pn-minimized #persistent-notes-settings {
       display: none !important;
     }
   `);
 
   let allNotes = {};
   let saveDebounceTimer = null;
+
+  function getGistId() { return GM_getValue("pn_gist_id", ""); }
+  function getApiKey() { return GM_getValue("pn_api_key", ""); }
 
   function getVillageInfo() {
     const select = document.querySelector('select[aria-label="Switch village"]');
@@ -198,24 +246,28 @@
   status.textContent = "⌛ Loading...";
   status.title = "Click to open Gist in browser";
 
-  // Click handler to open GitHub Gist in a new tab
   status.addEventListener("click", (e) => {
     e.stopPropagation();
-    let webUrl = CONFIG.API_URL;
-    if (CONFIG.SYNC_PROVIDER === "GITHUB_GIST") {
-      webUrl = CONFIG.API_URL.replace("api.github.com/gists", "gist.github.com");
+    const gistId = getGistId();
+    if (gistId) {
+      window.open(`https://gist.github.com/${gistId}`, "_blank");
     }
-    window.open(webUrl, "_blank");
   });
+
+  const settingsBtn = document.createElement("button");
+  settingsBtn.id = "pn-settings-btn";
+  settingsBtn.className = "pn-icon-btn";
+  settingsBtn.textContent = "⚙️";
+  settingsBtn.title = "Configure Gist Credentials";
 
   const toggleBtn = document.createElement("button");
   toggleBtn.id = "persistent-notes-toggle";
   toggleBtn.textContent = "—";
 
   const rightGroup = document.createElement("div");
-  rightGroup.style.display = "flex";
-  rightGroup.style.alignItems = "center";
+  rightGroup.className = "pn-header-actions";
   rightGroup.appendChild(status);
+  rightGroup.appendChild(settingsBtn);
   rightGroup.appendChild(toggleBtn);
 
   header.appendChild(title);
@@ -224,24 +276,52 @@
   const textarea = document.createElement("textarea");
   textarea.id = "persistent-notes-textarea";
 
+  const settingsPanel = document.createElement("div");
+  settingsPanel.id = "persistent-notes-settings";
+  settingsPanel.innerHTML = `
+    <div class="pn-input-group">
+      <label>Gist ID</label>
+      <input type="text" id="pn-input-gist" placeholder="YOUR_GIST_ID_HERE" value="${getGistId()}" />
+    </div>
+    <div class="pn-input-group">
+      <label>GitHub Token (ghp_...)</label>
+      <input type="password" id="pn-input-key" placeholder="ghp_YOUR_PERSONAL_TOKEN" value="${getApiKey()}" />
+    </div>
+    <button type="button" id="pn-save-settings">Save & Sync</button>
+  `;
+
   container.appendChild(header);
   container.appendChild(textarea);
+  container.appendChild(settingsPanel);
   document.body.appendChild(container);
 
   let currentVillage = getVillageInfo();
 
-  function getRequestHeaders() {
-    const headers = { "Content-Type": "application/json" };
-    if (CONFIG.SYNC_PROVIDER === "JSONBIN") {
-      headers["X-Master-Key"] = CONFIG.API_KEY;
-    } else if (CONFIG.SYNC_PROVIDER === "GITHUB_GIST" || CONFIG.SYNC_PROVIDER === "CUSTOM_REST") {
-      headers["Authorization"] = CONFIG.API_KEY.startsWith("Bearer ") ? CONFIG.API_KEY : `Bearer ${CONFIG.API_KEY}`;
-    }
-    return headers;
-  }
+  settingsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const showSettings = settingsPanel.style.display !== "flex";
+    settingsPanel.style.display = showSettings ? "flex" : "none";
+    textarea.style.display = showSettings ? "none" : "block";
+  });
+
+  document.getElementById("pn-save-settings").addEventListener("click", () => {
+    const newGist = document.getElementById("pn-input-gist").value.trim();
+    const newKey = document.getElementById("pn-input-key").value.trim();
+
+    GM_setValue("pn_gist_id", newGist);
+    GM_setValue("pn_api_key", newKey);
+
+    settingsPanel.style.display = "none";
+    textarea.style.display = "block";
+
+    fetchCloudNotes();
+  });
 
   function fetchCloudNotes() {
-    if (CONFIG.API_URL.includes("YOUR_") || CONFIG.API_KEY.includes("YOUR_")) {
+    const gistId = getGistId();
+    const apiKey = getApiKey();
+
+    if (!gistId || !apiKey) {
       status.textContent = "⚠️ Config Needed";
       loadVillageNotes(currentVillage);
       return;
@@ -249,19 +329,16 @@
 
     GM_xmlhttpRequest({
       method: "GET",
-      url: CONFIG.SYNC_PROVIDER === "JSONBIN" && !CONFIG.API_URL.endsWith("/latest") ? `${CONFIG.API_URL}/latest` : CONFIG.API_URL,
-      headers: getRequestHeaders(),
+      url: `https://api.github.com/gists/${gistId}`,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": apiKey.startsWith("Bearer ") ? apiKey : `Bearer ${apiKey}`
+      },
       onload: function (response) {
         if (response.status === 200) {
           const res = JSON.parse(response.responseText);
-          if (CONFIG.SYNC_PROVIDER === "JSONBIN") {
-            allNotes = res.record || {};
-          } else if (CONFIG.SYNC_PROVIDER === "GITHUB_GIST") {
-            const file = res.files["thronewake_notes.json"];
-            allNotes = file ? JSON.parse(file.content) : {};
-          } else {
-            allNotes = res || {};
-          }
+          const file = res.files["thronewake_notes.json"];
+          allNotes = file ? JSON.parse(file.content) : {};
           status.textContent = "☁️ Synced";
           loadVillageNotes(currentVillage);
         } else {
@@ -275,26 +352,25 @@
   }
 
   function pushCloudNotes() {
-    if (CONFIG.API_URL.includes("YOUR_") || CONFIG.API_KEY.includes("YOUR_")) return;
+    const gistId = getGistId();
+    const apiKey = getApiKey();
+
+    if (!gistId || !apiKey) return;
 
     status.textContent = "⏳ Saving...";
-    let bodyData;
 
-    if (CONFIG.SYNC_PROVIDER === "GITHUB_GIST") {
-      bodyData = JSON.stringify({
+    GM_xmlhttpRequest({
+      method: "PATCH",
+      url: `https://api.github.com/gists/${gistId}`,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": apiKey.startsWith("Bearer ") ? apiKey : `Bearer ${apiKey}`
+      },
+      data: JSON.stringify({
         files: {
           "thronewake_notes.json": { content: JSON.stringify(allNotes, null, 2) }
         }
-      });
-    } else {
-      bodyData = JSON.stringify(allNotes);
-    }
-
-    GM_xmlhttpRequest({
-      method: CONFIG.SYNC_PROVIDER === "GITHUB_GIST" ? "PATCH" : "PUT",
-      url: CONFIG.API_URL,
-      headers: getRequestHeaders(),
-      data: bodyData,
+      }),
       onload: function (response) {
         if (response.status === 200) {
           status.textContent = "☁️ Synced";
@@ -324,7 +400,7 @@
     allNotes[currentVillage.id] = textarea.value;
     status.textContent = "✏️ Typing...";
     clearTimeout(saveDebounceTimer);
-    saveDebounceTimer = setTimeout(pushCloudNotes, CONFIG.DEBOUNCE_DELAY_MS);
+    saveDebounceTimer = setTimeout(pushCloudNotes, 1000);
   });
 
   setInterval(() => {
@@ -352,7 +428,7 @@
   let isDragging = false, offsetX = 0, offsetY = 0;
 
   header.addEventListener("mousedown", (e) => {
-    if (e.target === toggleBtn || e.target === status) return;
+    if (e.target === toggleBtn || e.target === status || e.target === settingsBtn) return;
     isDragging = true;
     offsetX = e.clientX - container.offsetLeft;
     offsetY = e.clientY - container.offsetTop;
