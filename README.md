@@ -14,7 +14,7 @@ Several extensions into Thronewake game
 * You can click on the panel to copy a village breakdown
 * Optimized for mobile phones.
 
-## Top-Left Persistent Notepad (Cloud Config)
+## Persistent Notepad
 <img width="460" height="273" alt="image" src="https://github.com/user-attachments/assets/b1be3c46-df45-4037-9bcd-1337986dea9d" />
 
 * You need to setup your personal private gist to make cloud backups
