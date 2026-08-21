@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      12.4
-// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, optimal compact numbers (1 decimal max), increased typography size, 90-day Gist history, and Travian strategy modal.
+// @version      12.5
+// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, comma-separated raw numbers (1,234,567), 90-day Gist history, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -29,25 +29,13 @@
     let syncTimeout = null;
     let activeChart = null;
 
-    // --- Compact Number Formatting (Best Practice: Max 1 Decimal) ---
+    // --- Raw Number Formatting Helper (Comma-separated Thousands & Millions) ---
 
     function formatCompact(num, includeSign = false) {
         if (num === null || num === undefined || isNaN(num)) return 'N/A';
-        const absNum = Math.abs(num);
-        const sign = num < 0 ? '-' : (includeSign && num > 0 ? '+' : '');
-
-        let formatted = '';
-        if (absNum >= 1e9) {
-            formatted = (absNum / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
-        } else if (absNum >= 1e6) {
-            formatted = (absNum / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-        } else if (absNum >= 1e3) {
-            formatted = (absNum / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
-        } else {
-            formatted = Math.round(absNum).toString();
-        }
-
-        return sign + formatted;
+        const rounded = Math.round(num);
+        const sign = rounded > 0 && includeSign ? '+' : '';
+        return sign + rounded.toLocaleString('en-US');
     }
 
     // --- Gist Storage Operations ---
@@ -456,7 +444,7 @@
                     badge.className = 'tw-growth-badge';
                     container.appendChild(badge);
                 }
-                // Increased badge font size to 12px for better legibility
+
                 badge.style.cssText = `font-size: 12px; font-weight: 600; margin-left: 5px; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; ${colorStyle}`;
                 badge.textContent = `(${growthText}${momentumSymbol})`;
                 badge.title = tooltipText;
@@ -572,7 +560,7 @@
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
-                                    return `${metricLabel}: ${formatCompact(context.raw)} (${context.raw.toLocaleString()})`;
+                                    return `${metricLabel}: ${formatCompact(context.raw)}`;
                                 }
                             }
                         }
@@ -605,7 +593,7 @@
         // Initial render: Default to 30 Days view
         renderChartForDays(30);
 
-        // Inject Strategic Intel Panel (Increased typography)
+        // Inject Strategic Intel Panel
         const intel = getTravianStrategicIntel(playerName, currentValue, metricKey);
         const intelContainer = document.getElementById('tw-strat-intel');
         intelContainer.innerHTML = `
