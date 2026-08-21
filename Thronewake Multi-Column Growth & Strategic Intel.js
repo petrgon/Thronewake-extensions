@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      13.7
-// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, configurable number formatting & server speed multiplier (3x default), 90-day Gist history, intercepted Escape key modal closing, and Travian strategy modal.
+// @version      13.9
+// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, configurable number formatting, UTC/Local time toggle, server speed multiplier, 90-day UTC Gist history, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -20,9 +20,10 @@
     const GIST_TOKEN_KEY = 'tw_gist_token';
     const NUMBER_FORMAT_KEY = 'tw_number_format';
     const SERVER_SPEED_KEY = 'tw_server_speed';
+    const TIMEZONE_FORMAT_KEY = 'tw_timezone_format';
     const LOCAL_HISTORY_KEY = 'tw_local_history';
     const GIST_FILENAME = 'thronewake_leaderboard_history.json';
-    
+
     const ONE_DAY_MS = 24 * 60 * 60 * 1000;
     const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;       // Window for inline % badge
     const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;     // Full server season retention (90 days)
@@ -467,7 +468,7 @@
         }
 
         const isAlliancePage = window.location.pathname.includes('/alliance');
-        const now = Date.now();
+        const now = Date.now(); // Always pure UTC Epoch milliseconds
 
         const rows = table.querySelectorAll('tbody tr, [role="row"]');
         if (rows.length === 0) return;
@@ -530,7 +531,7 @@
 
                 const momentum = getMomentumInfo(catHistory, currentValue);
                 const momentumSymbol = momentum.symbol ? ` ${momentum.symbol}` : '';
-                
+
                 const gain3d = baseline !== null ? currentValue - baseline : 0;
                 const gain3dFormatted = formatCompact(gain3d, true);
 
@@ -623,12 +624,24 @@
             const minTime = daysLimit === 90 ? 0 : now - (daysLimit * ONE_DAY_MS);
             const filteredHistory = fullSortedHistory.filter(r => r.t >= minTime);
 
+            const timeMode = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
             const isLongRange = (daysLimit > 7);
+
             const labels = filteredHistory.map(r => {
                 const d = new Date(r.t);
-                return isLongRange
-                    ? `${d.getMonth() + 1}/${d.getDate()}`
-                    : `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+                if (timeMode === 'utc') {
+                    const month = d.getUTCMonth() + 1;
+                    const day = d.getUTCDate();
+                    const hours = d.getUTCHours().toString().padStart(2, '0');
+                    const mins = d.getUTCMinutes().toString().padStart(2, '0');
+                    return isLongRange ? `${month}/${day}` : `${month}/${day} ${hours}:${mins}`;
+                } else {
+                    const month = d.getMonth() + 1;
+                    const day = d.getDate();
+                    const hours = d.getHours().toString().padStart(2, '0');
+                    const mins = d.getMinutes().toString().padStart(2, '0');
+                    return isLongRange ? `${month}/${day}` : `${month}/${day} ${hours}:${mins}`;
+                }
             });
             const values = filteredHistory.map(r => r.v);
 
@@ -666,12 +679,21 @@
                                     const item = filteredHistory[idx];
                                     if (!item) return '';
                                     const d = new Date(item.t);
-                                    const month = d.getMonth() + 1;
-                                    const day = d.getDate();
-                                    const year = d.getFullYear();
-                                    const hours = d.getHours().toString().padStart(2, '0');
-                                    const mins = d.getMinutes().toString().padStart(2, '0');
-                                    return `${month}/${day}/${year} ${hours}:${mins}`;
+                                    if (timeMode === 'utc') {
+                                        const month = d.getUTCMonth() + 1;
+                                        const day = d.getUTCDate();
+                                        const year = d.getUTCFullYear();
+                                        const hours = d.getUTCHours().toString().padStart(2, '0');
+                                        const mins = d.getUTCMinutes().toString().padStart(2, '0');
+                                        return `${month}/${day}/${year} ${hours}:${mins} (UTC)`;
+                                    } else {
+                                        const month = d.getMonth() + 1;
+                                        const day = d.getDate();
+                                        const year = d.getFullYear();
+                                        const hours = d.getHours().toString().padStart(2, '0');
+                                        const mins = d.getMinutes().toString().padStart(2, '0');
+                                        return `${month}/${day}/${year} ${hours}:${mins} (Local)`;
+                                    }
                                 },
                                 label: function(context) {
                                     return `${metricLabel}: ${formatCompact(context.raw)}`;
@@ -681,13 +703,13 @@
                     },
                     scales: {
                         x: { ticks: { font: { size: 11 }, color: '#6a5a48', maxTicksLimit: 10 }, grid: { color: 'rgba(16,16,16,0.08)' } },
-                        y: { 
-                            ticks: { 
-                                font: { size: 11 }, 
+                        y: {
+                            ticks: {
+                                font: { size: 11 },
                                 color: '#6a5a48',
-                                callback: function(val) { return formatCompact(val); } 
-                            }, 
-                            grid: { color: 'rgba(16,16,16,0.08)' } 
+                                callback: function(val) { return formatCompact(val); }
+                            },
+                            grid: { color: 'rgba(16,16,16,0.08)' }
                         }
                     }
                 }
@@ -764,6 +786,7 @@
 
         const currentFormat = GM_getValue(NUMBER_FORMAT_KEY, 'raw');
         const currentSpeed = GM_getValue(SERVER_SPEED_KEY, 3);
+        const currentTimeFormat = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
 
         modal.innerHTML = `
             <div style="background: #ece8d6; border: 2px solid #101010; padding: 18px; width: 340px; border-radius: 4px; color: #101010; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
@@ -785,6 +808,13 @@
                         <option value="4" ${parseFloat(currentSpeed) === 4 ? 'selected' : ''}>4x</option>
                         <option value="5" ${parseFloat(currentSpeed) === 5 ? 'selected' : ''}>5x</option>
                         <option value="10" ${parseFloat(currentSpeed) === 10 ? 'selected' : ''}>10x</option>
+                    </select>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Time Display</label>
+                    <select id="tw-select-time-format" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;">
+                        <option value="utc" ${currentTimeFormat === 'utc' ? 'selected' : ''}>UTC Time</option>
+                        <option value="local" ${currentTimeFormat === 'local' ? 'selected' : ''}>Local Time</option>
                     </select>
                 </div>
                 <div style="margin-bottom: 12px;">
@@ -836,12 +866,14 @@
             const token = document.getElementById('tw-input-gist-token').value.trim();
             const numFormat = document.getElementById('tw-select-num-format').value;
             const serverSpeed = parseFloat(document.getElementById('tw-select-server-speed').value) || 3;
+            const timeFormat = document.getElementById('tw-select-time-format').value;
             const statusEl = document.getElementById('tw-gist-status');
 
             GM_setValue(GIST_ID_KEY, gistId);
             GM_setValue(GIST_TOKEN_KEY, token);
             GM_setValue(NUMBER_FORMAT_KEY, numFormat);
             GM_setValue(SERVER_SPEED_KEY, serverSpeed);
+            GM_setValue(TIMEZONE_FORMAT_KEY, timeFormat);
 
             statusEl.textContent = 'Pulling remote data...';
             pullFromGist((success, err) => {
