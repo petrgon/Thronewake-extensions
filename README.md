@@ -24,6 +24,7 @@ Tracks individual player leaderboard categories over time and provides real-time
 * **Travian-Style Strategy Intel**: Automatically profiles players into combat archetypes based on 24-hour activity (*Eco Rusher*, *Hammer Builder*, *Decimated Defense*, *Active Raider*).
 * **Automatic Gist Sync**: Retains a full 90-day server season history backed up to your private GitHub Gist, featuring automatic bypass for large payloads (>1MB).
 * **Customizable Number Formatting**: Toggle between Raw (1,234,567) and Compact (1.2M / 1.2k) display modes anytime in the Gist Settings modal.
+* **Flexible Time Display**: Switch between UTC and Local time formats across chart X-axes and hover tooltips directly in the Gist Settings modal.
 
 <p align="left">
   <img width="614" alt="Leaderboard Growth Badges" src="https://github.com/user-attachments/assets/10a4893f-9c22-48ec-a665-6b0a435ef565" />
