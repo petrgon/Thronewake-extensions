@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      12.5
-// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, comma-separated raw numbers (1,234,567), 90-day Gist history, and Travian strategy modal.
+// @version      13.0
+// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, configurable number formatting (Raw vs Compact), 90-day Gist history, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -18,8 +18,9 @@
 
     const GIST_ID_KEY = 'tw_gist_id';
     const GIST_TOKEN_KEY = 'tw_gist_token';
+    const NUMBER_FORMAT_KEY = 'tw_number_format';
     const GIST_FILENAME = 'thronewake_leaderboard_history.json';
-
+    
     const ONE_DAY_MS = 24 * 60 * 60 * 1000;
     const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;       // Window for inline % badge
     const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;     // Full server season retention (90 days)
@@ -29,13 +30,30 @@
     let syncTimeout = null;
     let activeChart = null;
 
-    // --- Raw Number Formatting Helper (Comma-separated Thousands & Millions) ---
+    // --- Dynamic Number Formatting Helper (Raw vs Compact) ---
 
     function formatCompact(num, includeSign = false) {
         if (num === null || num === undefined || isNaN(num)) return 'N/A';
+        const formatMode = GM_getValue(NUMBER_FORMAT_KEY, 'raw');
         const rounded = Math.round(num);
-        const sign = rounded > 0 && includeSign ? '+' : '';
-        return sign + rounded.toLocaleString('en-US');
+        const absNum = Math.abs(rounded);
+        const sign = rounded < 0 ? '-' : (includeSign && rounded > 0 ? '+' : '');
+
+        if (formatMode === 'compact') {
+            let formatted = '';
+            if (absNum >= 1e9) {
+                formatted = (absNum / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+            } else if (absNum >= 1e6) {
+                formatted = (absNum / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+            } else if (absNum >= 1e3) {
+                formatted = (absNum / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+            } else {
+                formatted = absNum.toString();
+            }
+            return sign + formatted;
+        } else {
+            return sign + absNum.toLocaleString('en-US');
+        }
     }
 
     // --- Gist Storage Operations ---
@@ -431,7 +449,7 @@
 
                 const momentum = getMomentumInfo(catHistory, currentValue);
                 const momentumSymbol = momentum.symbol ? ` ${momentum.symbol}` : '';
-
+                
                 const gain3d = baseline !== null ? currentValue - baseline : 0;
                 const gain3dFormatted = formatCompact(gain3d, true);
 
@@ -567,13 +585,13 @@
                     },
                     scales: {
                         x: { ticks: { font: { size: 11 }, color: '#6a5a48', maxTicksLimit: 10 }, grid: { color: 'rgba(16,16,16,0.08)' } },
-                        y: {
-                            ticks: {
-                                font: { size: 11 },
+                        y: { 
+                            ticks: { 
+                                font: { size: 11 }, 
                                 color: '#6a5a48',
-                                callback: function(val) { return formatCompact(val); }
-                            },
-                            grid: { color: 'rgba(16,16,16,0.08)' }
+                                callback: function(val) { return formatCompact(val); } 
+                            }, 
+                            grid: { color: 'rgba(16,16,16,0.08)' } 
                         }
                     }
                 }
@@ -648,6 +666,8 @@
             font-family: var(--font-sans, sans-serif);
         `;
 
+        const currentFormat = GM_getValue(NUMBER_FORMAT_KEY, 'raw');
+
         modal.innerHTML = `
             <div style="background: #ece8d6; border: 2px solid #101010; padding: 18px; width: 340px; border-radius: 4px; color: #101010; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
                 <h3 style="font-weight: 700; margin-bottom: 12px; text-transform: uppercase; font-size: 14px; color: #6a5a48;">Gist Sync Settings</h3>
@@ -655,9 +675,16 @@
                     <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Gist ID</label>
                     <input type="text" id="tw-input-gist-id" value="${GM_getValue(GIST_ID_KEY, '')}" placeholder="e.g. 872976f2aa4ecec..." style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;" />
                 </div>
-                <div style="margin-bottom: 12px;">
+                <div style="margin-bottom: 10px;">
                     <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">GitHub Token (ghp_...)</label>
                     <input type="password" id="tw-input-gist-token" value="${GM_getValue(GIST_TOKEN_KEY, '')}" placeholder="ghp_YOUR_TOKEN" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;" />
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Number Formatting</label>
+                    <select id="tw-select-num-format" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;">
+                        <option value="raw" ${currentFormat === 'raw' ? 'selected' : ''}>Raw (1,234,567)</option>
+                        <option value="compact" ${currentFormat === 'compact' ? 'selected' : ''}>Compact (1.2M / 1.2k)</option>
+                    </select>
                 </div>
                 <div id="tw-gist-status" style="font-size: 11px; margin-bottom: 12px; color: #165eb9; font-weight: 600;"></div>
                 <div style="display: flex; gap: 8px; justify-content: space-between;">
@@ -698,15 +725,18 @@
         document.getElementById('tw-btn-save-modal').onclick = () => {
             const gistId = document.getElementById('tw-input-gist-id').value.trim();
             const token = document.getElementById('tw-input-gist-token').value.trim();
+            const numFormat = document.getElementById('tw-select-num-format').value;
             const statusEl = document.getElementById('tw-gist-status');
 
             GM_setValue(GIST_ID_KEY, gistId);
             GM_setValue(GIST_TOKEN_KEY, token);
+            GM_setValue(NUMBER_FORMAT_KEY, numFormat);
 
             statusEl.textContent = 'Pulling remote data...';
             pullFromGist((success, err) => {
                 if (success) {
                     statusEl.textContent = 'Synced successfully!';
+                    processTable();
                     setTimeout(() => { modal.style.display = 'none'; }, 1000);
                 } else {
                     statusEl.textContent = `Sync failed (${err || 'check credentials'})`;
