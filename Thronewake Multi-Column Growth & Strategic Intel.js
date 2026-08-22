@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      13.9
-// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, configurable number formatting, UTC/Local time toggle, server speed multiplier, 90-day UTC Gist history, and Travian strategy modal.
+// @version      14.1
+// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -21,14 +21,15 @@
     const NUMBER_FORMAT_KEY = 'tw_number_format';
     const SERVER_SPEED_KEY = 'tw_server_speed';
     const TIMEZONE_FORMAT_KEY = 'tw_timezone_format';
+    const RECORD_INTERVAL_KEY = 'tw_record_interval';
     const LOCAL_HISTORY_KEY = 'tw_local_history';
     const GIST_FILENAME = 'thronewake_leaderboard_history.json';
 
+    const ONE_HOUR_MS = 60 * 60 * 1000;
     const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;       // Window for inline % badge
-    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;     // Full server season retention (90 days)
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
-    // Load initial history from local storage fallback
     let gistHistory = {};
     try {
         const rawLocal = GM_getValue(LOCAL_HISTORY_KEY, '{}');
@@ -44,8 +45,6 @@
     function saveLocalHistory() {
         GM_setValue(LOCAL_HISTORY_KEY, JSON.stringify(gistHistory));
     }
-
-    // --- Global Hotkey Handlers (Intercepted Esc Key to Close Modals) ---
 
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
@@ -65,8 +64,6 @@
             }
         }
     }, true);
-
-    // --- Dynamic Number Formatting Helper (Raw vs Compact) ---
 
     function formatCompact(num, includeSign = false) {
         if (num === null || num === undefined || isNaN(num)) return 'N/A';
@@ -91,8 +88,6 @@
             return sign + absNum.toLocaleString('en-US');
         }
     }
-
-    // --- Gist Storage Operations ---
 
     function pullFromGist(callback) {
         const gistId = GM_getValue(GIST_ID_KEY, '');
@@ -204,8 +199,6 @@
         }, 2500);
     }
 
-    // --- Growth & Momentum Calculations ---
-
     function getBaselineValue(records) {
         if (!records || records.length === 0) return null;
 
@@ -280,24 +273,23 @@
         const gainPrior2d = Math.max(0, rec24.v - rec72.v);
         const avgPriorDailyGain = gainPrior2d / 2;
 
-        let symbol = '▶';
+        let symbol = '▶\uFE0E';
         let status = '➡️ Steady pace';
 
         if (gain24h === 0 && gainPrior2d > 0) {
-            symbol = '⏸';
+            symbol = '⏸\uFE0E';
             status = '⏸️ Growth paused';
         } else if (gain24h > (avgPriorDailyGain * 1.25) && gain24h > 0) {
-            symbol = '▲';
+            symbol = '▲\uFE0E';
             status = '🚀 Accelerating';
         } else if (gain24h < (avgPriorDailyGain * 0.75) && avgPriorDailyGain > 0) {
-            symbol = '▼';
+            symbol = '▼\uFE0E';
             status = '📉 Slowing down';
         }
 
         return { symbol, status, gain24h, avgPriorDailyGain };
     }
 
-    // Travian Strategic Assessment (Server Speed Adjusted)
     function getTravianStrategicIntel(playerName, currentValue, metricKey) {
         const serverSpeed = parseFloat(GM_getValue(SERVER_SPEED_KEY, 3)) || 3;
         const pData = gistHistory[playerName] || {};
@@ -400,24 +392,15 @@
         return Math.round(num) || 0;
     }
 
-    // --- Leaderboard Table Isolation ---
-
     function findLeaderboardTable() {
         const tables = document.querySelectorAll('table, [role="table"]');
         for (const t of tables) {
-            if (t.querySelector('a[href*="player"], a[href*="user"], a[href*="alliance"], a[href*="/p/"]')) {
-                return t;
-            }
-        }
-        for (const t of tables) {
-            if (!t.getAttribute('aria-rowcount')) {
+            if (t.querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="alliance"], a[href*="/p/"]')) {
                 return t;
             }
         }
         return null;
     }
-
-    // --- Dynamic Column Mapping ---
 
     function getMetricsConfig(table) {
         const category = getActiveCategory();
@@ -456,7 +439,33 @@
         return config;
     }
 
-    // --- DOM Inline Processing ---
+    function canInjectPercentages() {
+        const table = findLeaderboardTable();
+        if (!table) return false;
+
+        const rows = table.querySelectorAll('tbody tr, [role="row"]');
+        if (rows.length === 0) return false;
+
+        const metricsConfig = getMetricsConfig(table);
+        if (metricsConfig.length === 0) return false;
+
+        let validCellFound = false;
+        for (const row of rows) {
+            const tds = Array.from(row.querySelectorAll('td, [role="gridcell"]'));
+            const playerLink = row.querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="alliance"], a[href*="/p/"]') || tds[1]?.querySelector('a');
+            if (playerLink) {
+                for (const m of metricsConfig) {
+                    if (tds[m.colIndex - 1]) {
+                        validCellFound = true;
+                        break;
+                    }
+                }
+            }
+            if (validCellFound) break;
+        }
+
+        return validCellFound;
+    }
 
     function processTable() {
         const table = findLeaderboardTable();
@@ -468,7 +477,10 @@
         }
 
         const isAlliancePage = window.location.pathname.includes('/alliance');
-        const now = Date.now(); // Always pure UTC Epoch milliseconds
+        const now = Date.now();
+
+        const recordIntervalHours = parseFloat(GM_getValue(RECORD_INTERVAL_KEY, 1)) || 1;
+        const minRecordMs = recordIntervalHours * ONE_HOUR_MS;
 
         const rows = table.querySelectorAll('tbody tr, [role="row"]');
         if (rows.length === 0) return;
@@ -505,7 +517,7 @@
                 const lastRec = catHistory[catHistory.length - 1];
 
                 if (!isAlliancePage) {
-                    if (!lastRec || lastRec.v !== currentValue || (now - lastRec.t) > 21600000) {
+                    if (!lastRec || (now - lastRec.t) >= minRecordMs) {
                         catHistory.push({ t: now, v: currentValue });
                         gistHistory[playerName][m.key] = catHistory.filter(r => (now - r.t) <= NINETY_DAYS_MS);
                         hasNewData = true;
@@ -545,7 +557,7 @@
                     container.appendChild(badge);
                 }
 
-                badge.style.cssText = `font-size: 11px; font-weight: 700; margin-left: 6px; display: inline-block; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; ${colorStyle}`;
+                badge.style.cssText = `font-size: 11px; font-weight: 700; margin-left: 6px; display: inline-block; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; font-variant-emoji: text; ${colorStyle}`;
                 badge.textContent = `(${growthText}${momentumSymbol})`;
                 badge.title = tooltipText;
 
@@ -564,7 +576,22 @@
         }
     }
 
-    // --- Trend Chart & Strategy Intel Modal ---
+    function filterHistoryForPlot(history) {
+        if (!history || history.length <= 1) return history;
+        const downsampled = [];
+        let lastHourBucket = -1;
+
+        history.forEach(r => {
+            const hourBucket = Math.floor(r.t / ONE_HOUR_MS);
+            if (hourBucket !== lastHourBucket) {
+                downsampled.push(r);
+                lastHourBucket = hourBucket;
+            } else {
+                downsampled[downsampled.length - 1] = r;
+            }
+        });
+        return downsampled;
+    }
 
     function openTrendModal(playerName, metricKey, metricLabel, currentValue) {
         let modal = document.getElementById('tw-trend-modal');
@@ -617,7 +644,7 @@
         document.getElementById('tw-trend-title').textContent = `${playerName} - ${metricLabel} Intel`;
 
         const playerHistory = (gistHistory[playerName] && gistHistory[playerName][metricKey]) ? gistHistory[playerName][metricKey] : [];
-        const fullSortedHistory = [...playerHistory].sort((a, b) => a.t - b.t);
+        const fullSortedHistory = filterHistoryForPlot([...playerHistory].sort((a, b) => a.t - b.t));
 
         function renderChartForDays(daysLimit) {
             const now = Date.now();
@@ -661,14 +688,21 @@
                         backgroundColor: 'rgba(22, 94, 185, 0.15)',
                         borderWidth: 2,
                         fill: true,
-                        tension: 0.2,
-                        pointRadius: filteredHistory.length > 50 ? 2 : 4,
-                        pointBackgroundColor: '#8a6e46'
+                        tension: 0.15,
+                        pointRadius: 0,
+                        pointHoverRadius: 6,
+                        pointBackgroundColor: '#8a6e46',
+                        pointBorderColor: '#ffffff',
+                        pointBorderWidth: 1.5
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
@@ -689,7 +723,7 @@
                                     } else {
                                         const month = d.getMonth() + 1;
                                         const day = d.getDate();
-                                        const year = d.getFullYear();
+                                        const year = d.getDate();
                                         const hours = d.getHours().toString().padStart(2, '0');
                                         const mins = d.getMinutes().toString().padStart(2, '0');
                                         return `${month}/${day}/${year} ${hours}:${mins} (Local)`;
@@ -716,7 +750,6 @@
             });
         }
 
-        // Attach range button handlers
         const rangeBtns = document.querySelectorAll('#tw-chart-range-btns button');
         rangeBtns.forEach(btn => {
             btn.onclick = () => {
@@ -726,10 +759,8 @@
             };
         });
 
-        // Initial render: Default to 30 Days view
         renderChartForDays(30);
 
-        // Inject Strategic Intel Panel
         const intel = getTravianStrategicIntel(playerName, currentValue, metricKey);
         const intelContainer = document.getElementById('tw-strat-intel');
         intelContainer.innerHTML = `
@@ -750,11 +781,20 @@
         `;
     }
 
-    // --- Config Modal UI ---
-
     function injectConfigButton() {
+        const existingBtn = document.getElementById('tw-gist-config-btn');
+        const isInjectable = canInjectPercentages();
+
+        // Only display settings button if percentage injection into the table is possible
+        if (!isInjectable) {
+            if (existingBtn) existingBtn.remove();
+            return;
+        }
+
+        if (existingBtn) return;
+
         const backBtn = document.querySelector('.lucide-arrow-left')?.closest('button');
-        if (!backBtn || document.getElementById('tw-gist-config-btn')) return;
+        if (!backBtn) return;
 
         const cfgBtn = document.createElement('button');
         cfgBtn.id = 'tw-gist-config-btn';
@@ -787,6 +827,7 @@
         const currentFormat = GM_getValue(NUMBER_FORMAT_KEY, 'raw');
         const currentSpeed = GM_getValue(SERVER_SPEED_KEY, 3);
         const currentTimeFormat = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
+        const currentRecordInterval = parseFloat(GM_getValue(RECORD_INTERVAL_KEY, 1));
 
         modal.innerHTML = `
             <div style="background: #ece8d6; border: 2px solid #101010; padding: 18px; width: 340px; border-radius: 4px; color: #101010; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
@@ -798,6 +839,17 @@
                 <div style="margin-bottom: 10px;">
                     <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">GitHub Token (ghp_...)</label>
                     <input type="password" id="tw-input-gist-token" value="${GM_getValue(GIST_TOKEN_KEY, '')}" placeholder="ghp_YOUR_TOKEN" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;" />
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Record Interval</label>
+                    <select id="tw-select-record-interval" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;">
+                        <option value="0.5" ${currentRecordInterval === 0.5 ? 'selected' : ''}>Every 30 minutes</option>
+                        <option value="1" ${currentRecordInterval === 1 ? 'selected' : ''}>Every 1 hour (Default)</option>
+                        <option value="3" ${currentRecordInterval === 3 ? 'selected' : ''}>Every 3 hours</option>
+                        <option value="6" ${currentRecordInterval === 6 ? 'selected' : ''}>Every 6 hours</option>
+                        <option value="12" ${currentRecordInterval === 12 ? 'selected' : ''}>Every 12 hours</option>
+                        <option value="24" ${currentRecordInterval === 24 ? 'selected' : ''}>Every 24 hours</option>
+                    </select>
                 </div>
                 <div style="margin-bottom: 10px;">
                     <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Server Speed</label>
@@ -867,6 +919,7 @@
             const numFormat = document.getElementById('tw-select-num-format').value;
             const serverSpeed = parseFloat(document.getElementById('tw-select-server-speed').value) || 3;
             const timeFormat = document.getElementById('tw-select-time-format').value;
+            const recordInterval = parseFloat(document.getElementById('tw-select-record-interval').value) || 1;
             const statusEl = document.getElementById('tw-gist-status');
 
             GM_setValue(GIST_ID_KEY, gistId);
@@ -874,6 +927,7 @@
             GM_setValue(NUMBER_FORMAT_KEY, numFormat);
             GM_setValue(SERVER_SPEED_KEY, serverSpeed);
             GM_setValue(TIMEZONE_FORMAT_KEY, timeFormat);
+            GM_setValue(RECORD_INTERVAL_KEY, recordInterval);
 
             statusEl.textContent = 'Pulling remote data...';
             pullFromGist((success, err) => {
