@@ -19,12 +19,12 @@ A collection of Userscripts designed to enhance gameplay, tracking, and strategy
 ### 1. [Thronewake Multi-Column Growth & Strategic Intel](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Multi-Column%20Growth%20%26%20Strategic%20Intel.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20Multi-Column%20Growth%20%26%20Strategic%20Intel.js))
 Tracks individual player leaderboard categories over time and provides real-time growth, momentum, and strategic combat intelligence.
 
-* **Inline 3-Day Growth & 24h Momentum**: Displays percentage changes alongside real-time velocity indicators (`▲` Accelerating, `▼` Slowing down, `⏸` Growth paused).
-* **Interactive Trend Charts**: Click any growth badge to view historical line charts with customizable time ranges (`3D`, `7D`, `30D`, `All`).
-* **Travian-Style Strategy Intel**: Automatically profiles players into combat archetypes based on 24-hour activity (*Eco Rusher*, *Hammer Builder*, *Decimated Defense*, *Active Raider*).
-* **Automatic Gist Sync**: Retains a full 90-day server season history backed up to your private GitHub Gist, featuring automatic bypass for large payloads (>1MB).
-* **Customizable Number Formatting**: Toggle between Raw (1,234,567) and Compact (1.2M / 1.2k) display modes anytime in the Gist Settings modal.
-* **Flexible Time Display**: Switch between UTC and Local time formats across chart X-axes and hover tooltips directly in the Gist Settings modal.
+* **Server-Speed Scaled Growth**: Calculates progression using 3 vs 9 game day windows adjusted to server speed, displaying exact real duration tooltips.
+* **Inline Momentum Badges**: Displays growth percentages alongside theme-harmonized momentum icons (`▲` Accelerating, `▶` Steady, `▼` Slowing/Declining, `⏸` Paused).
+* **Strategic Combat Intel**: Profiles players into tactical archetypes (*Eco Rusher*, *Hammer Builder*, *Decimated Defense*, *Active Raider*) scaled to account size.
+* **Interactive Trend Charts**: Click growth badges to view historical line charts (`3D`, `7D`, `30D`, `All`) with live real-time score injection.
+* **Smart Gist Backup**: Syncs 90-day season history and settings to a private GitHub Gist, using two-point boundary compression to maximize storage.
+* **Customizable Settings**: Easily toggle between Raw (`1,234,567`) or Compact (`1.2M`) numbers, UTC or Local time, and custom record intervals.
 
 <p align="left">
   <img width="614" alt="Leaderboard Growth Badges" src="https://github.com/user-attachments/assets/10a4893f-9c22-48ec-a665-6b0a435ef565" />
