@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      14.1
-// @description  Tracks leaderboard columns individually, displays inline 3-day growth percentages with 24h momentum, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history, and Travian strategy modal.
+// @version      16.3
+// @description  Tracks leaderboard columns individually, displays inline server-speed scaled growth percentages (3 game days vs 9 game days ratio: 1d/3d for 3x, 3d/9d for 1x) with momentum-based dynamic theme color coding, two-point flatline compression, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history (with settings sync & connection indicator), live plot data injection at Date.now(), dynamic metric projections, real time duration tooltips, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -28,6 +28,7 @@
     const ONE_HOUR_MS = 60 * 60 * 1000;
     const ONE_DAY_MS = 24 * 60 * 60 * 1000;
     const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+    const NINE_DAYS_MS = 9 * 24 * 60 * 60 * 1000;
     const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
     let gistHistory = {};
@@ -39,11 +40,45 @@
     }
 
     let isGistLoaded = false;
+    let gistStatus = 'not_configured'; // 'connected', 'error', 'not_configured'
     let syncTimeout = null;
     let activeChart = null;
 
+    // --- Settings Sync Helpers (__config__ Namespace) ---
+
+    function syncSettingsFromGist(remoteSettings) {
+        if (!remoteSettings || typeof remoteSettings !== 'object') return;
+        if (remoteSettings.numFormat !== undefined) GM_setValue(NUMBER_FORMAT_KEY, remoteSettings.numFormat);
+        if (remoteSettings.serverSpeed !== undefined) GM_setValue(SERVER_SPEED_KEY, remoteSettings.serverSpeed);
+        if (remoteSettings.timeFormat !== undefined) GM_setValue(TIMEZONE_FORMAT_KEY, remoteSettings.timeFormat);
+        if (remoteSettings.recordInterval !== undefined) GM_setValue(RECORD_INTERVAL_KEY, remoteSettings.recordInterval);
+    }
+
+    function embedSettingsInGistHistory() {
+        gistHistory.__config__ = {
+            numFormat: GM_getValue(NUMBER_FORMAT_KEY, 'raw'),
+            serverSpeed: GM_getValue(SERVER_SPEED_KEY, 3),
+            timeFormat: GM_getValue(TIMEZONE_FORMAT_KEY, 'utc'),
+            recordInterval: GM_getValue(RECORD_INTERVAL_KEY, 1)
+        };
+    }
+
     function saveLocalHistory() {
+        embedSettingsInGistHistory();
         GM_setValue(LOCAL_HISTORY_KEY, JSON.stringify(gistHistory));
+    }
+
+    function getValidHistory(records) {
+        if (!records || !Array.isArray(records)) return [];
+        return records.filter(r => typeof r.v === 'number' && r.v < 1000000000);
+    }
+
+    function formatRealDuration(hours) {
+        if (hours >= 24) {
+            const days = hours / 24;
+            return `${days.toFixed(1).replace(/\.0$/, '')}d`;
+        }
+        return `${hours.toFixed(1).replace(/\.0$/, '')}h`;
     }
 
     document.addEventListener('keydown', (e) => {
@@ -95,6 +130,7 @@
 
         if (!gistId || !token) {
             isGistLoaded = true;
+            gistStatus = 'not_configured';
             if (callback) callback(false, 'Enter Gist ID & Token first');
             processTable();
             return;
@@ -122,12 +158,16 @@
                                     onload: function (rawRes) {
                                         if (rawRes.status === 200) {
                                             gistHistory = JSON.parse(rawRes.responseText);
+                                            if (gistHistory.__config__) syncSettingsFromGist(gistHistory.__config__);
+                                            else embedSettingsInGistHistory();
                                             saveLocalHistory();
                                             isGistLoaded = true;
+                                            gistStatus = 'connected';
                                             if (callback) callback(true);
                                             processTable();
                                         } else {
                                             isGistLoaded = true;
+                                            gistStatus = 'error';
                                             if (callback) callback(false, 'Raw Stream Failed');
                                             processTable();
                                         }
@@ -137,34 +177,42 @@
                             }
 
                             gistHistory = JSON.parse(fileObj.content);
+                            if (gistHistory.__config__) syncSettingsFromGist(gistHistory.__config__);
+                            else embedSettingsInGistHistory();
                             saveLocalHistory();
                             isGistLoaded = true;
+                            gistStatus = 'connected';
                             if (callback) callback(true);
                             processTable();
                         } else {
                             isGistLoaded = true;
+                            gistStatus = 'connected';
                             if (callback) callback(true);
                             processTable();
                         }
                     } catch (e) {
                         console.error('Error parsing Gist JSON', e);
                         isGistLoaded = true;
+                        gistStatus = 'error';
                         if (callback) callback(false, 'Invalid JSON in Gist');
                         processTable();
                     }
                 } else {
                     isGistLoaded = true;
+                    gistStatus = 'error';
                     if (callback) callback(false, `HTTP Error ${response.status}`);
                     processTable();
                 }
             },
             onerror: function () {
                 isGistLoaded = true;
+                gistStatus = 'error';
                 if (callback) callback(false, 'Network Error / Blocked');
                 processTable();
             },
             ontimeout: function () {
                 isGistLoaded = true;
+                gistStatus = 'error';
                 if (callback) callback(false, 'Request Timed Out');
                 processTable();
             }
@@ -172,6 +220,7 @@
     }
 
     function pushToGistDebounced() {
+        embedSettingsInGistHistory();
         saveLocalHistory();
 
         if (syncTimeout) clearTimeout(syncTimeout);
@@ -194,41 +243,18 @@
                             content: JSON.stringify(gistHistory, null, 2)
                         }
                     }
-                })
+                }),
+                onload: function(res) {
+                    if (res.status === 200) gistStatus = 'connected';
+                    else gistStatus = 'error';
+                },
+                onerror: function() { gistStatus = 'error'; }
             });
         }, 2500);
     }
 
-    function getBaselineValue(records) {
-        if (!records || records.length === 0) return null;
-
-        const validRecords = records.filter(r => typeof r.v === 'number' && r.v < 1000000000);
-        if (validRecords.length === 0) return null;
-
-        const sorted = validRecords.sort((a, b) => a.t - b.t);
-        const now = Date.now();
-        const targetTime = now - THREE_DAYS_MS;
-
-        if (sorted[0].t > targetTime) {
-            return sorted[0].v;
-        }
-
-        let closest = sorted[0];
-        let minDiff = Math.abs(closest.t - targetTime);
-
-        for (let i = 1; i < sorted.length; i++) {
-            const diff = Math.abs(sorted[i].t - targetTime);
-            if (diff < minDiff) {
-                minDiff = diff;
-                closest = sorted[i];
-            }
-        }
-        return closest.v;
-    }
-
     function getGainOverHours(records, hours) {
-        if (!records || records.length < 2) return 0;
-        const valid = records.filter(r => typeof r.v === 'number' && r.v < 1000000000).sort((a, b) => a.t - b.t);
+        const valid = getValidHistory(records);
         if (valid.length < 2) return 0;
 
         const targetTime = Date.now() - (hours * 60 * 60 * 1000);
@@ -241,54 +267,96 @@
         return Math.max(0, valid[valid.length - 1].v - rec.v);
     }
 
-    function getMomentumInfo(records, currentValue) {
-        if (!records || records.length < 2) {
-            return { symbol: '', status: '➡️ Gathering history...', gain24h: 0, avgPriorDailyGain: 0 };
-        }
+    // --- Server Speed Scaled Growth Stats (3 Game Days vs 9 Game Days Window) ---
 
-        const valid = records.filter(r => typeof r.v === 'number' && r.v < 1000000000).sort((a, b) => a.t - b.t);
+    function getSpeedScaledGrowthStats(validRecords, currentValue) {
+        const valid = getValidHistory(validRecords);
+        const serverSpeed = parseFloat(GM_getValue(SERVER_SPEED_KEY, 3)) || 3;
+
+        // 3 Game Days = (72 / serverSpeed) real hours; 9 Game Days = (216 / serverSpeed) real hours
+        const real1Hours = 72 / serverSpeed;
+        const real3Hours = 216 / serverSpeed;
+        const str1 = formatRealDuration(real1Hours);
+        const str3 = formatRealDuration(real3Hours);
+
         if (valid.length < 2) {
-            return { symbol: '', status: '➡️ Gathering history...', gain24h: 0, avgPriorDailyGain: 0 };
+            return { percentText: '0.00%', pct3dText: '0.00%', gain1Day: 0, gain3Days: 0, str1, str3, symbol: '', status: '▶ Gathering history...', colorStyle: 'color: #948e85; font-weight: 400;' };
         }
 
         const now = Date.now();
 
-        const target24 = now - ONE_DAY_MS;
-        let rec24 = valid[0];
-        let minDiff24 = Math.abs(rec24.t - target24);
+        const real1DayMs = THREE_DAYS_MS / serverSpeed;
+        const real3DaysMs = NINE_DAYS_MS / serverSpeed;
+
+        // Primary Window Baseline (3 Game Days)
+        const target1Day = now - real1DayMs;
+        let rec1Day = valid[0];
+        let minDiff1 = Math.abs(rec1Day.t - target1Day);
         for (let i = 1; i < valid.length; i++) {
-            let diff = Math.abs(valid[i].t - target24);
-            if (diff < minDiff24) { minDiff24 = diff; rec24 = valid[i]; }
+            let diff = Math.abs(valid[i].t - target1Day);
+            if (diff < minDiff1) { minDiff1 = diff; rec1Day = valid[i]; }
         }
 
-        const target72 = now - THREE_DAYS_MS;
-        let rec72 = valid[0];
-        let minDiff72 = Math.abs(rec72.t - target72);
+        // Secondary Window Baseline (9 Game Days)
+        const target3Days = now - real3DaysMs;
+        let rec3Days = valid[0];
+        let minDiff3 = Math.abs(rec3Days.t - target3Days);
         for (let i = 1; i < valid.length; i++) {
-            let diff = Math.abs(valid[i].t - target72);
-            if (diff < minDiff72) { minDiff72 = diff; rec72 = valid[i]; }
+            let diff = Math.abs(valid[i].t - target3Days);
+            if (diff < minDiff3) { minDiff3 = diff; rec3Days = valid[i]; }
         }
 
-        const gain24h = Math.max(0, currentValue - rec24.v);
-        const gainPrior2d = Math.max(0, rec24.v - rec72.v);
-        const avgPriorDailyGain = gainPrior2d / 2;
+        const gain1Day = currentValue - rec1Day.v;
+        const gain3Days = currentValue - rec3Days.v;
+        const gainPrior2Days = Math.max(0, rec1Day.v - rec3Days.v);
+        const avgPriorDailyGain = gainPrior2Days / 2;
+
+        let percentText = '0.00%';
+        if (rec1Day.v > 0) {
+            const pct = ((gain1Day / rec1Day.v) * 100).toFixed(2);
+            if (gain1Day > 0) {
+                percentText = `+${pct}%`;
+            } else if (gain1Day < 0) {
+                percentText = `${pct}%`;
+            }
+        }
+
+        let pct3dText = '0.00%';
+        if (rec3Days.v > 0) {
+            const pct3 = ((gain3Days / rec3Days.v) * 100).toFixed(2);
+            if (gain3Days > 0) {
+                pct3dText = `+${pct3}%`;
+            } else if (gain3Days < 0) {
+                pct3dText = `${pct3}%`;
+            }
+        }
 
         let symbol = '▶\uFE0E';
-        let status = '➡️ Steady pace';
+        let status = '▶ Steady pace';
+        let colorStyle = 'color: #6a5a48; font-weight: 400;'; // UI Parchment Brown for Steady
 
-        if (gain24h === 0 && gainPrior2d > 0) {
+        if (gain1Day === 0) {
             symbol = '⏸\uFE0E';
-            status = '⏸️ Growth paused';
-        } else if (gain24h > (avgPriorDailyGain * 1.25) && gain24h > 0) {
-            symbol = '▲\uFE0E';
-            status = '🚀 Accelerating';
-        } else if (gain24h < (avgPriorDailyGain * 0.75) && avgPriorDailyGain > 0) {
+            status = '⏸ Growth paused';
+            colorStyle = 'color: #948e85; font-weight: 400;'; // Disabled Light Muted Gray
+        } else if (gain1Day < 0) {
             symbol = '▼\uFE0E';
-            status = '📉 Slowing down';
+            status = '▼ Stalled / Declining';
+            colorStyle = 'color: #c5221f; font-weight: 400;'; // Brighter Clear Red
+        } else if (avgPriorDailyGain > 0 && gain1Day > (avgPriorDailyGain * 1.25)) {
+            symbol = '▲\uFE0E';
+            status = '▲ Accelerating';
+            colorStyle = 'color: #15803d; font-weight: 400;'; // Emerald Green
+        } else if (avgPriorDailyGain > 0 && gain1Day < (avgPriorDailyGain * 0.75)) {
+            symbol = '▼\uFE0E';
+            status = '▼ Slowing down';
+            colorStyle = 'color: #c5221f; font-weight: 400;'; // Brighter Clear Red
         }
 
-        return { symbol, status, gain24h, avgPriorDailyGain };
+        return { percentText, pct3dText, gain1Day, gain3Days, str1, str3, symbol, status, colorStyle };
     }
+
+    // --- Dynamic Account-Stage Relative Travian Strategy Assessment ---
 
     function getTravianStrategicIntel(playerName, currentValue, metricKey) {
         const serverSpeed = parseFloat(GM_getValue(SERVER_SPEED_KEY, 3)) || 3;
@@ -303,41 +371,51 @@
         const defGain24h = getGainOverHours(pvpDefHistory, 24);
         const lootGain24h = getGainOverHours(lootHistory, 24);
 
+        const validPop = getValidHistory(popHistory);
+        const currentPopRec = validPop[validPop.length - 1];
+        const currentPop = (currentPopRec && typeof currentPopRec.v === 'number') ? currentPopRec.v : (metricKey === 'pop_population' ? currentValue : 0);
+
+        const relPopGrowth = currentPop > 0 ? (popGain24h / currentPop) : 0;
+
+        const pvpThreshold = Math.max(50, currentPop * 0.08) * serverSpeed;
+        const lootThreshold = Math.max(10000, currentPop * 50) * serverSpeed;
+        const ecoPopRateThreshold = 0.03 * serverSpeed;
+
         let archetype = "⚖️ Balanced Growth";
         let statusBg = "#e2e8f0";
         let statusColor = "#334155";
         let tactic = "Player maintains an even ratio of eco growth and army expansion. Standard scouting advised.";
 
-        if (defGain24h > (100 * serverSpeed)) {
+        if (defGain24h > pvpThreshold) {
             archetype = "💥 Decimated Defense (Heavy Losses)";
             statusBg = "#fce7f3";
             statusColor = "#9d174d";
             tactic = "Player suffered heavy troop casualties defending their village (defense points = lost own def-units). Defensive force is decimated—ideal target for immediate follow-up attack or chiefing!";
-        } else if (pvpGain24h > (100 * serverSpeed) && defGain24h < (20 * serverSpeed)) {
+        } else if (pvpGain24h > pvpThreshold && defGain24h < (pvpThreshold * 0.25)) {
             archetype = "⚔️ Unpunished Attacker";
             statusBg = "#fee2e2";
             statusColor = "#b91c1c";
             tactic = "Kills many enemy troops on attacks without facing counter-attacks. Has a strong hammer—prepare defense stacks for wave attacks.";
-        } else if (pvpGain24h > (50 * serverSpeed) && defGain24h > (50 * serverSpeed)) {
+        } else if (pvpGain24h > (pvpThreshold * 0.5) && defGain24h > (pvpThreshold * 0.5)) {
             archetype = "🔥 Two-Way War";
             statusBg = "#ffedd5";
             statusColor = "#c2410c";
             tactic = "Heavy fighting on both sides—killing enemy units on offense while losing troops defending against incoming raids.";
-        } else if (popGain24h > (40 * serverSpeed) && pvpGain24h < (20 * serverSpeed) && defGain24h < (20 * serverSpeed)) {
+        } else if (relPopGrowth >= ecoPopRateThreshold && pvpGain24h < (pvpThreshold * 0.3) && defGain24h < (pvpThreshold * 0.3)) {
             archetype = "🏰 Eco Rusher (Simmer)";
             statusBg = "#dcfce7";
             statusColor = "#15803d";
             tactic = "Upgrading fields/buildings for new villages. Zero defensive losses or attack kills—prime target for catapults or chiefing before wall completion.";
-        } else if (popGain24h <= (5 * serverSpeed) && pvpGain24h > (100 * serverSpeed)) {
+        } else if (relPopGrowth <= (0.005 * serverSpeed) && pvpGain24h > pvpThreshold) {
             archetype = "⚔️ Hammer Builder";
             statusBg = "#fee2e2";
             statusColor = "#b91c1c";
             tactic = "Population growth stalled while offensive points surged. Barracks/Stables running non-stop. Request defense stacks or plan a preventive strike.";
-        } else if (lootGain24h > (30000 * serverSpeed)) {
+        } else if (lootGain24h > lootThreshold) {
             archetype = "🐎 Active Raider";
             statusBg = "#fef3c7";
             statusColor = "#b45309";
-            tactic = "High daily loot yield. Expect fakes and raids. Keep stocks low, build crannies, or plan counter-raid traps on returning troops.";
+            tactic = "High daily loot yield for their account size. Expect fakes and raids. Keep stocks low, build crannies, or plan counter-raid traps on returning troops.";
         } else if (popGain24h === 0 && pvpGain24h === 0 && defGain24h === 0 && lootGain24h === 0) {
             archetype = "💤 Inactive / Potential Farm";
             statusBg = "#f1f5f9";
@@ -345,9 +423,15 @@
             tactic = "Zero growth across all sectors over 24h. Send scouts to verify garrison and resource stocks.";
         }
 
-        const proj7d = currentValue + (getGainOverHours(pData[metricKey] || [], 24) * 7);
+        let unit = 'pts';
+        if (metricKey.includes('village')) unit = 'villages';
+        else if (metricKey.includes('pop')) unit = 'pop';
+        else if (metricKey.includes('loot')) unit = 'res';
 
-        return { archetype, statusBg, statusColor, tactic, proj7d, popGain24h, pvpGain24h, defGain24h, lootGain24h };
+        const metric24hGain = getGainOverHours(pData[metricKey] || [], 24);
+        const proj7d = currentValue + (metric24hGain * 7 * 0.8);
+
+        return { archetype, statusBg, statusColor, tactic, proj7d, popGain24h, pvpGain24h, defGain24h, lootGain24h, unit };
     }
 
     function getActiveCategory() {
@@ -509,45 +593,45 @@
                 if (currentValue > 1000000000) return;
 
                 if (!gistHistory[playerName][m.key]) gistHistory[playerName][m.key] = [];
-                let catHistory = gistHistory[playerName][m.key];
-
-                catHistory = catHistory.filter(r => typeof r.v === 'number' && r.v < 1000000000);
-                gistHistory[playerName][m.key] = catHistory;
+                let catHistory = getValidHistory(gistHistory[playerName][m.key]);
 
                 const lastRec = catHistory[catHistory.length - 1];
 
                 if (!isAlliancePage) {
                     if (!lastRec || (now - lastRec.t) >= minRecordMs) {
-                        catHistory.push({ t: now, v: currentValue });
-                        gistHistory[playerName][m.key] = catHistory.filter(r => (now - r.t) <= NINETY_DAYS_MS);
+                        const len = catHistory.length;
+                        if (len === 0) {
+                            catHistory.push({ t: now, v: currentValue });
+                        } else if (currentValue !== catHistory[len - 1].v) {
+                            catHistory.push({ t: now, v: currentValue });
+                        } else {
+                            if (len >= 2 && catHistory[len - 2].v === currentValue) {
+                                catHistory[len - 1].t = now;
+                            } else {
+                                catHistory.push({ t: now, v: currentValue });
+                            }
+                        }
+                        catHistory = catHistory.filter(r => (now - r.t) <= NINETY_DAYS_MS);
+                        catHistory.sort((a, b) => a.t - b.t);
+                        gistHistory[playerName][m.key] = catHistory;
                         hasNewData = true;
                     }
+                } else {
+                    gistHistory[playerName][m.key] = catHistory;
                 }
 
-                const baseline = getBaselineValue(catHistory);
-                let growthText = '0.00%';
-                let colorStyle = 'color: rgba(16,16,16,0.5);';
+                const stats = getSpeedScaledGrowthStats(catHistory, currentValue);
+                const momentumSymbol = stats.symbol ? ` ${stats.symbol}` : '';
+                const gain1DayFormatted = formatCompact(stats.gain1Day, true);
+                const gain3DaysFormatted = formatCompact(stats.gain3Days, true);
 
-                if (baseline !== null && baseline > 0) {
-                    const diff = currentValue - baseline;
-                    const percent = ((diff / baseline) * 100).toFixed(2);
-
-                    if (diff > 0) {
-                        growthText = `+${percent}%`;
-                        colorStyle = 'color: #15803d; font-weight: 700;';
-                    } else if (diff < 0) {
-                        growthText = `${percent}%`;
-                        colorStyle = 'color: #dc2626; font-weight: 700;';
-                    }
-                }
-
-                const momentum = getMomentumInfo(catHistory, currentValue);
-                const momentumSymbol = momentum.symbol ? ` ${momentum.symbol}` : '';
-
-                const gain3d = baseline !== null ? currentValue - baseline : 0;
-                const gain3dFormatted = formatCompact(gain3d, true);
-
-                const tooltipText = `${playerName} (${m.label}): ${growthText} over 3 days (${gain3dFormatted})\n${momentum.status} • Click for tactical analysis`;
+                const tooltipText = [
+                    `${playerName} — ${m.label}`,
+                    `• ${stats.str1} Gain: ${gain1DayFormatted} (${stats.percentText})`,
+                    `• ${stats.str3} Gain: ${gain3DaysFormatted} (${stats.pct3dText})`,
+                    `• Pace: ${stats.status}`,
+                    `\nClick for tactical analysis`
+                ].join('\n');
 
                 const container = targetTd.querySelector('div.flex, div, span') || targetTd;
                 let badge = container.querySelector('.tw-growth-badge');
@@ -557,8 +641,8 @@
                     container.appendChild(badge);
                 }
 
-                badge.style.cssText = `font-size: 11px; font-weight: 700; margin-left: 6px; display: inline-block; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; font-variant-emoji: text; ${colorStyle}`;
-                badge.textContent = `(${growthText}${momentumSymbol})`;
+                badge.style.cssText = `font-size: 11px; font-weight: 400; margin-left: 3px; display: inline-block; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; font-variant-emoji: text; ${stats.colorStyle}`;
+                badge.textContent = `(${stats.percentText}${momentumSymbol})`;
                 badge.title = tooltipText;
 
                 badge.onclick = (e) => {
@@ -576,23 +660,6 @@
         }
     }
 
-    function filterHistoryForPlot(history) {
-        if (!history || history.length <= 1) return history;
-        const downsampled = [];
-        let lastHourBucket = -1;
-
-        history.forEach(r => {
-            const hourBucket = Math.floor(r.t / ONE_HOUR_MS);
-            if (hourBucket !== lastHourBucket) {
-                downsampled.push(r);
-                lastHourBucket = hourBucket;
-            } else {
-                downsampled[downsampled.length - 1] = r;
-            }
-        });
-        return downsampled;
-    }
-
     function openTrendModal(playerName, metricKey, metricLabel, currentValue) {
         let modal = document.getElementById('tw-trend-modal');
         if (!modal) {
@@ -608,15 +675,15 @@
             modal.innerHTML = `
                 <div style="background: #ece8d6; border: 2px solid #101010; padding: 20px; width: 580px; max-width: 92vw; border-radius: 4px; color: #101010; box-shadow: 0 4px 16px rgba(0,0,0,0.6); max-height: 90vh; overflow-y: auto;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid rgba(16,16,16,0.2); padding-bottom: 6px;">
-                        <h3 id="tw-trend-title" style="font-weight: 700; text-transform: uppercase; font-size: 15px; color: #6a5a48; margin: 0;">Trend Chart</h3>
+                        <h3 id="tw-trend-title" style="font-weight: 600; text-transform: uppercase; font-size: 15px; color: #6a5a48; margin: 0;">Trend Chart</h3>
                         <div style="display: flex; align-items: center; gap: 8px;">
                             <div id="tw-chart-range-btns" style="display: flex; gap: 4px;">
-                                <button type="button" data-days="3" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 700; cursor: pointer; border-radius: 2px;">3D</button>
-                                <button type="button" data-days="7" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 700; cursor: pointer; border-radius: 2px;">7D</button>
-                                <button type="button" data-days="30" style="background: #165eb9; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 700; cursor: pointer; border-radius: 2px;">30D</button>
-                                <button type="button" data-days="90" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 700; cursor: pointer; border-radius: 2px;">All</button>
+                                <button type="button" data-days="3" style="background: #165eb9; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">3D</button>
+                                <button type="button" data-days="7" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">7D</button>
+                                <button type="button" data-days="30" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">30D</button>
+                                <button type="button" data-days="90" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">All</button>
                             </div>
-                            <button type="button" id="tw-btn-close-chart" style="background: #165eb9; color: #fff; border: 1px solid #101010; width: 26px; height: 26px; border-radius: 50%; font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 1;">✕</button>
+                            <button type="button" id="tw-btn-close-chart" style="background: #165eb9; color: #fff; border: 1px solid #101010; width: 26px; height: 26px; border-radius: 50%; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 1;">✕</button>
                         </div>
                     </div>
                     <div style="position: relative; height: 240px; width: 100%; margin-bottom: 14px;">
@@ -644,54 +711,41 @@
         document.getElementById('tw-trend-title').textContent = `${playerName} - ${metricLabel} Intel`;
 
         const playerHistory = (gistHistory[playerName] && gistHistory[playerName][metricKey]) ? gistHistory[playerName][metricKey] : [];
-        const fullSortedHistory = filterHistoryForPlot([...playerHistory].sort((a, b) => a.t - b.t));
+        const fullSortedHistory = getValidHistory(playerHistory).sort((a, b) => a.t - b.t);
 
         function renderChartForDays(daysLimit) {
             const now = Date.now();
             const minTime = daysLimit === 90 ? 0 : now - (daysLimit * ONE_DAY_MS);
             const filteredHistory = fullSortedHistory.filter(r => r.t >= minTime);
 
-            const timeMode = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
-            const isLongRange = (daysLimit > 7);
+            const chartData = filteredHistory.map(r => ({ x: r.t, y: r.v }));
 
-            const labels = filteredHistory.map(r => {
-                const d = new Date(r.t);
-                if (timeMode === 'utc') {
-                    const month = d.getUTCMonth() + 1;
-                    const day = d.getUTCDate();
-                    const hours = d.getUTCHours().toString().padStart(2, '0');
-                    const mins = d.getUTCMinutes().toString().padStart(2, '0');
-                    return isLongRange ? `${month}/${day}` : `${month}/${day} ${hours}:${mins}`;
-                } else {
-                    const month = d.getMonth() + 1;
-                    const day = d.getDate();
-                    const hours = d.getHours().toString().padStart(2, '0');
-                    const mins = d.getMinutes().toString().padStart(2, '0');
-                    return isLongRange ? `${month}/${day}` : `${month}/${day} ${hours}:${mins}`;
-                }
-            });
-            const values = filteredHistory.map(r => r.v);
+            if (chartData.length === 0 || chartData[chartData.length - 1].x < now) {
+                chartData.push({ x: now, y: currentValue });
+            }
 
             if (activeChart) {
                 activeChart.destroy();
             }
 
+            const minX = chartData.length > 0 ? chartData[0].x : undefined;
+            const maxX = chartData.length > 0 ? chartData[chartData.length - 1].x : undefined;
+
             const ctx = document.getElementById('tw-trend-canvas').getContext('2d');
             activeChart = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: labels.length > 0 ? labels : ['No Data'],
                     datasets: [{
                         label: metricLabel,
-                        data: values.length > 0 ? values : [0],
+                        data: chartData.length > 0 ? chartData : [{ x: Date.now(), y: 0 }],
                         borderColor: '#165eb9',
                         backgroundColor: 'rgba(22, 94, 185, 0.15)',
-                        borderWidth: 2,
+                        borderWidth: 2.5,
                         fill: true,
-                        tension: 0.15,
-                        pointRadius: 0,
+                        tension: 0.25,
+                        pointRadius: 3,
                         pointHoverRadius: 6,
-                        pointBackgroundColor: '#8a6e46',
+                        pointBackgroundColor: '#165eb9',
                         pointBorderColor: '#ffffff',
                         pointBorderWidth: 1.5
                     }]
@@ -700,7 +754,8 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     interaction: {
-                        mode: 'index',
+                        mode: 'nearest',
+                        axis: 'x',
                         intersect: false
                     },
                     plugins: {
@@ -709,10 +764,10 @@
                             callbacks: {
                                 title: function(context) {
                                     if (!context || !context.length) return '';
-                                    const idx = context[0].dataIndex;
-                                    const item = filteredHistory[idx];
-                                    if (!item) return '';
-                                    const d = new Date(item.t);
+                                    const timestamp = context[0].parsed.x;
+                                    if (!timestamp) return '';
+                                    const d = new Date(timestamp);
+                                    const timeMode = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
                                     if (timeMode === 'utc') {
                                         const month = d.getUTCMonth() + 1;
                                         const day = d.getUTCDate();
@@ -723,20 +778,48 @@
                                     } else {
                                         const month = d.getMonth() + 1;
                                         const day = d.getDate();
-                                        const year = d.getDate();
+                                        const year = d.getFullYear();
                                         const hours = d.getHours().toString().padStart(2, '0');
                                         const mins = d.getMinutes().toString().padStart(2, '0');
                                         return `${month}/${day}/${year} ${hours}:${mins} (Local)`;
                                     }
                                 },
                                 label: function(context) {
-                                    return `${metricLabel}: ${formatCompact(context.raw)}`;
+                                    return `${metricLabel}: ${formatCompact(context.parsed.y)}`;
                                 }
                             }
                         }
                     },
                     scales: {
-                        x: { ticks: { font: { size: 11 }, color: '#6a5a48', maxTicksLimit: 10 }, grid: { color: 'rgba(16,16,16,0.08)' } },
+                        x: {
+                            type: 'linear',
+                            bounds: 'data',
+                            min: minX,
+                            max: maxX,
+                            ticks: {
+                                font: { size: 11 },
+                                color: '#6a5a48',
+                                maxTicksLimit: 7,
+                                callback: function(val) {
+                                    const d = new Date(val);
+                                    const timeMode = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
+                                    if (timeMode === 'utc') {
+                                        const month = d.getUTCMonth() + 1;
+                                        const day = d.getUTCDate();
+                                        const hours = d.getUTCHours().toString().padStart(2, '0');
+                                        const mins = d.getUTCMinutes().toString().padStart(2, '0');
+                                        return `${month}/${day} ${hours}:${mins}`;
+                                    } else {
+                                        const month = d.getMonth() + 1;
+                                        const day = d.getDate();
+                                        const hours = d.getHours().toString().padStart(2, '0');
+                                        const mins = d.getMinutes().toString().padStart(2, '0');
+                                        return `${month}/${day} ${hours}:${mins}`;
+                                    }
+                                }
+                            },
+                            grid: { color: 'rgba(16,16,16,0.08)' }
+                        },
                         y: {
                             ticks: {
                                 font: { size: 11 },
@@ -759,14 +842,14 @@
             };
         });
 
-        renderChartForDays(30);
+        renderChartForDays(3);
 
         const intel = getTravianStrategicIntel(playerName, currentValue, metricKey);
         const intelContainer = document.getElementById('tw-strat-intel');
         intelContainer.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <span style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: #6a5a48;">Travian Strategy Profile</span>
-                <span style="font-size: 12px; font-weight: 700; background: ${intel.statusBg}; color: ${intel.statusColor}; padding: 3px 10px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.15);">${intel.archetype}</span>
+                <span style="font-size: 12px; font-weight: 600; text-transform: uppercase; color: #6a5a48;">Travian Strategy Profile</span>
+                <span style="font-size: 12px; font-weight: 600; background: ${intel.statusBg}; color: ${intel.statusColor}; padding: 3px 10px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.15);">${intel.archetype}</span>
             </div>
             <div style="font-size: 13px; line-height: 1.5; color: #101010; margin-bottom: 10px;">
                 <strong>Tactical Assessment:</strong> ${intel.tactic}
@@ -776,7 +859,7 @@
                 <div>• <strong>24h PvP Attack (Kills):</strong> ${formatCompact(intel.pvpGain24h, true)} pts</div>
                 <div>• <strong>24h PvP Defense (Lost):</strong> ${formatCompact(intel.defGain24h, true)} pts</div>
                 <div>• <strong>24h Loot Yield:</strong> ${formatCompact(intel.lootGain24h, true)} res</div>
-                <div style="grid-column: span 2; font-weight: 600;">• <strong>7d Projection:</strong> ~${formatCompact(Math.round(intel.proj7d))} score</div>
+                <div style="grid-column: span 2; font-weight: 600;">• <strong>7d Projection:</strong> ~${formatCompact(Math.round(intel.proj7d))} ${intel.unit}</div>
             </div>
         `;
     }
@@ -785,7 +868,6 @@
         const existingBtn = document.getElementById('tw-gist-config-btn');
         const isInjectable = canInjectPercentages();
 
-        // Only display settings button if percentage injection into the table is possible
         if (!isInjectable) {
             if (existingBtn) existingBtn.remove();
             return;
@@ -824,24 +906,42 @@
             font-family: var(--font-sans, sans-serif);
         `;
 
+        const currentGistId = GM_getValue(GIST_ID_KEY, '');
         const currentFormat = GM_getValue(NUMBER_FORMAT_KEY, 'raw');
         const currentSpeed = GM_getValue(SERVER_SPEED_KEY, 3);
         const currentTimeFormat = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
         const currentRecordInterval = parseFloat(GM_getValue(RECORD_INTERVAL_KEY, 1));
 
+        let statusText = '⚪ Not Configured';
+        let statusStyle = 'color: #64748b; background: #f1f5f9; border: 1px solid #cbd5e1;';
+
+        if (gistStatus === 'connected') {
+            statusText = '🟢 Connected';
+            statusStyle = 'color: #15803d; background: #dcfce7; border: 1px solid #86efac;';
+        } else if (gistStatus === 'error') {
+            statusText = '🔴 Disconnected';
+            statusStyle = 'color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5;';
+        }
+
         modal.innerHTML = `
             <div style="background: #ece8d6; border: 2px solid #101010; padding: 18px; width: 340px; border-radius: 4px; color: #101010; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
-                <h3 style="font-weight: 700; margin-bottom: 12px; text-transform: uppercase; font-size: 14px; color: #6a5a48;">Gist Sync Settings</h3>
-                <div style="margin-bottom: 10px;">
-                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Gist ID</label>
-                    <input type="text" id="tw-input-gist-id" value="${GM_getValue(GIST_ID_KEY, '')}" placeholder="e.g. 872976f2aa4ecec..." style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;" />
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <h3 style="font-weight: 600; text-transform: uppercase; font-size: 14px; color: #6a5a48; margin: 0;">Gist Sync Settings</h3>
+                    <span id="tw-gist-conn-badge" style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; ${statusStyle}">${statusText}</span>
                 </div>
                 <div style="margin-bottom: 10px;">
-                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">GitHub Token (ghp_...)</label>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
+                        <label style="font-size: 11px; font-weight: 600; color: #6a5a48; text-transform: uppercase;">Gist ID</label>
+                        <a id="tw-open-gist-link" href="https://gist.github.com/${currentGistId}" target="_blank" rel="noopener noreferrer" style="font-size: 11px; font-weight: 600; color: #165eb9; text-decoration: underline; ${currentGistId ? '' : 'display: none;'}">Open Gist ↗</a>
+                    </div>
+                    <input type="text" id="tw-input-gist-id" value="${currentGistId}" placeholder="e.g. 872976f2aa4ecec..." style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;" />
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size: 11px; font-weight: 600; display: block; color: #6a5a48; text-transform: uppercase;">GitHub Token (ghp_...)</label>
                     <input type="password" id="tw-input-gist-token" value="${GM_getValue(GIST_TOKEN_KEY, '')}" placeholder="ghp_YOUR_TOKEN" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;" />
                 </div>
                 <div style="margin-bottom: 10px;">
-                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Record Interval</label>
+                    <label style="font-size: 11px; font-weight: 600; display: block; color: #6a5a48; text-transform: uppercase;">Record Interval</label>
                     <select id="tw-select-record-interval" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;">
                         <option value="0.5" ${currentRecordInterval === 0.5 ? 'selected' : ''}>Every 30 minutes</option>
                         <option value="1" ${currentRecordInterval === 1 ? 'selected' : ''}>Every 1 hour (Default)</option>
@@ -852,7 +952,7 @@
                     </select>
                 </div>
                 <div style="margin-bottom: 10px;">
-                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Server Speed</label>
+                    <label style="font-size: 11px; font-weight: 600; display: block; color: #6a5a48; text-transform: uppercase;">Server Speed</label>
                     <select id="tw-select-server-speed" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;">
                         <option value="1" ${parseFloat(currentSpeed) === 1 ? 'selected' : ''}>1x</option>
                         <option value="2" ${parseFloat(currentSpeed) === 2 ? 'selected' : ''}>2x</option>
@@ -863,14 +963,14 @@
                     </select>
                 </div>
                 <div style="margin-bottom: 10px;">
-                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Time Display</label>
+                    <label style="font-size: 11px; font-weight: 600; display: block; color: #6a5a48; text-transform: uppercase;">Time Display</label>
                     <select id="tw-select-time-format" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;">
                         <option value="utc" ${currentTimeFormat === 'utc' ? 'selected' : ''}>UTC Time</option>
                         <option value="local" ${currentTimeFormat === 'local' ? 'selected' : ''}>Local Time</option>
                     </select>
                 </div>
                 <div style="margin-bottom: 12px;">
-                    <label style="font-size: 11px; font-weight: 700; display: block; color: #6a5a48; text-transform: uppercase;">Number Formatting</label>
+                    <label style="font-size: 11px; font-weight: 600; display: block; color: #6a5a48; text-transform: uppercase;">Number Formatting</label>
                     <select id="tw-select-num-format" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px;">
                         <option value="raw" ${currentFormat === 'raw' ? 'selected' : ''}>Raw (1,234,567)</option>
                         <option value="compact" ${currentFormat === 'compact' ? 'selected' : ''}>Compact (1.2M / 1.2k)</option>
@@ -878,16 +978,30 @@
                 </div>
                 <div id="tw-gist-status" style="font-size: 11px; margin-bottom: 12px; color: #165eb9; font-weight: 600;"></div>
                 <div style="display: flex; gap: 8px; justify-content: space-between;">
-                    <button type="button" id="tw-btn-reset-modal" style="background: #dc2626; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 700; cursor: pointer; border-radius: 3px;">Reset History</button>
+                    <button type="button" id="tw-btn-reset-modal" style="background: #dc2626; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px;">Reset History</button>
                     <div style="display: flex; gap: 8px;">
-                        <button type="button" id="tw-btn-close-modal" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 700; cursor: pointer; border-radius: 3px;">Close</button>
-                        <button type="button" id="tw-btn-save-modal" style="background: #165eb9; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 700; cursor: pointer; border-radius: 3px;">Save & Sync</button>
+                        <button type="button" id="tw-btn-close-modal" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px;">Close</button>
+                        <button type="button" id="tw-btn-save-modal" style="background: #165eb9; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px;">Save & Sync</button>
                     </div>
                 </div>
             </div>
         `;
 
         document.body.appendChild(modal);
+
+        const gistInput = document.getElementById('tw-input-gist-id');
+        const openLink = document.getElementById('tw-open-gist-link');
+        if (gistInput && openLink) {
+            gistInput.addEventListener('input', () => {
+                const val = gistInput.value.trim();
+                if (val) {
+                    openLink.href = `https://gist.github.com/${val}`;
+                    openLink.style.display = 'inline';
+                } else {
+                    openLink.style.display = 'none';
+                }
+            });
+        }
 
         modal.onclick = (e) => {
             if (e.target === modal) {
@@ -901,7 +1015,10 @@
 
         document.getElementById('tw-btn-reset-modal').onclick = () => {
             if (confirm('Are you sure you want to clear all recorded player history? Your Gist ID and Token will be kept.')) {
+                const cfg = gistHistory.__config__;
                 gistHistory = {};
+                if (cfg) gistHistory.__config__ = cfg;
+                else embedSettingsInGistHistory();
                 saveLocalHistory();
 
                 document.querySelectorAll('.tw-growth-badge').forEach(b => b.remove());
@@ -929,14 +1046,28 @@
             GM_setValue(TIMEZONE_FORMAT_KEY, timeFormat);
             GM_setValue(RECORD_INTERVAL_KEY, recordInterval);
 
+            embedSettingsInGistHistory();
+            saveLocalHistory();
+
             statusEl.textContent = 'Pulling remote data...';
             pullFromGist((success, err) => {
+                const connBadge = document.getElementById('tw-gist-conn-badge');
                 if (success) {
+                    embedSettingsInGistHistory();
+                    pushToGistDebounced();
                     statusEl.textContent = 'Synced successfully!';
+                    if (connBadge) {
+                        connBadge.textContent = '🟢 Connected';
+                        connBadge.style.cssText = 'font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; color: #15803d; background: #dcfce7; border: 1px solid #86efac;';
+                    }
                     processTable();
                     setTimeout(() => { modal.style.display = 'none'; }, 1000);
                 } else {
                     statusEl.textContent = `Sync failed (${err || 'check credentials'})`;
+                    if (connBadge) {
+                        connBadge.textContent = '🔴 Disconnected';
+                        connBadge.style.cssText = 'font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5;';
+                    }
                 }
             });
         };
