@@ -35,11 +35,13 @@ Tracks individual player leaderboard categories over time and provides real-time
 ---
 
 ### 2. [Thronewake - Empire Defense Tracker](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20-%20Empire%20Defense%20Tracker.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20-%20Empire%20Defense%20Tracker.js))
-Helps you collect and organize total troop counts across all your territories.
+Helps you collect and organize total defense troop counts across all your territories with live sync tracking and dual export options.
 
-* **Data Collection**: Open the troops count bottom-right panel and visit each village to record data.
-* **Breakdown Export**: Click the panel to copy a complete village troop breakdown to your clipboard.
-* **Mobile Friendly**: Fully optimized for mobile phone browsers.
+* **Automated Data Collection**: Open the bottom-right troop panel and visit each village to automatically record and update defense data.
+* **Quick Stats Export (Single-Click)**: Click once to copy just the core summary line (e.g., `🛡️ Def Inf: 23,599 | 👁️ Scouts: 2,008`).
+* **Full Breakdown Export (Double-Click)**: Click twice within 800ms to copy the full multi-village empire breakdown.
+* **Hover Sync Indicator**: Hover over the panel to see how many villages have been synced within the last hour (e.g., 🏠 `6/8`).
+* **Compact & Mobile-Friendly**: Space-efficient card layout with clean typography, fully optimized for mobile phone browsers and desktop views alike.
 
 <p align="left">
   <img width="187" alt="Empire Defense Tracker Panel" src="https://github.com/user-attachments/assets/4751da98-7455-42a3-bfac-ee21e0eaeaa2" />
@@ -68,10 +70,6 @@ An interactive travel duration, distance, and UTC arrival time calculator built 
 * **Piecewise Travel Math**: Accurately models Server Speed (2x default), Bannerfield scaling (>20 tiles), Local Influence (final 25% boost), and research bonuses.
 * **Smart Hotkeys**: Single-key shortcuts for picking coordinates (`O`/`T`) and switching factions (`E`/`V`/`S`).
 * **Persistent Settings**: Saves active faction, research levels, building modifiers, and layout preferences automatically across sessions.
-
-<p align="left">
-  <img width="460" alt="Thronewake Map Travel Time Calculator" src="YOUR_IMAGE_URL_HERE" />
-</p>
 
 <p align="left">
   <img width="731" height="821" alt="image" src="https://github.com/user-attachments/assets/76a339d8-2c57-4fe1-a348-61c9443db570" />
