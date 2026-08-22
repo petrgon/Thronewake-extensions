@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      17.1
+// @version      17.2
 // @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], persistent modal time range selection across player views, parenthesized badge stripping, negative value support, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
@@ -767,29 +767,30 @@
     }
 
     function injectConfigButton() {
-        const existingBtn = document.getElementById('tw-gist-config-btn');
         if (!canInjectPercentages()) {
+            const existingBtn = document.getElementById('tw-growth-gist-config-btn');
             if (existingBtn) existingBtn.remove();
             return;
         }
-        if (existingBtn) return;
+        // Prevent duplicate injections
+        if (document.getElementById('tw-growth-gist-config-btn')) return;
 
         const backBtn = document.querySelector('.lucide-arrow-left')?.closest('button');
         if (!backBtn) return;
 
         const cfgBtn = document.createElement('button');
-        cfgBtn.id = 'tw-gist-config-btn';
+        cfgBtn.id = 'tw-growth-gist-config-btn'; // Unique ID
         cfgBtn.type = 'button';
         cfgBtn.className = backBtn.className;
         cfgBtn.title = 'Configure Gist Sync';
         cfgBtn.style.marginRight = '6px';
         cfgBtn.innerHTML = `<span><span class="sr-only">Gist Config</span><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings size-5"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></span>`;
 
-        cfgBtn.onclick = openGistModal;
+        cfgBtn.onclick = openGistModal2;
         backBtn.parentNode.insertBefore(cfgBtn, backBtn);
     }
 
-    function openGistModal() {
+    function openGistModal2() {
         let modal = document.getElementById('tw-gist-modal');
         if (modal) { modal.style.display = 'flex'; return; }
 
