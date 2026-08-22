@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      16.3
-// @description  Tracks leaderboard columns individually, displays inline server-speed scaled growth percentages (3 game days vs 9 game days ratio: 1d/3d for 3x, 3d/9d for 1x) with momentum-based dynamic theme color coding, two-point flatline compression, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history (with settings sync & connection indicator), live plot data injection at Date.now(), dynamic metric projections, real time duration tooltips, and Travian strategy modal.
+// @version      16.4
+// @description  Tracks leaderboard columns individually, displays inline server-speed scaled growth percentages with momentum-based dynamic theme color coding, compact array tuple storage [timestamp, value], immediate Gist sync on value change, within-interval sample overriding, two-point flatline compression, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history (with settings sync & connection indicator), live plot data injection at Date.now(), dynamic metric projections, clean text tooltips, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -41,7 +41,6 @@
 
     let isGistLoaded = false;
     let gistStatus = 'not_configured'; // 'connected', 'error', 'not_configured'
-    let syncTimeout = null;
     let activeChart = null;
 
     // --- Settings Sync Helpers (__config__ Namespace) ---
@@ -68,9 +67,14 @@
         GM_setValue(LOCAL_HISTORY_KEY, JSON.stringify(gistHistory));
     }
 
+    // Normalizes legacy object records {t, v} or compact tuples [t, v] into unified {t, v}
     function getValidHistory(records) {
         if (!records || !Array.isArray(records)) return [];
-        return records.filter(r => typeof r.v === 'number' && r.v < 1000000000);
+        return records.map(r => {
+            if (Array.isArray(r)) return { t: r[0], v: r[1] };
+            if (r && typeof r === 'object') return { t: r.t, v: r.v };
+            return null;
+        }).filter(r => r && typeof r.v === 'number' && r.v < 1000000000);
     }
 
     function formatRealDuration(hours) {
@@ -219,38 +223,35 @@
         });
     }
 
-    function pushToGistDebounced() {
+    function pushToGistImmediate() {
         embedSettingsInGistHistory();
         saveLocalHistory();
 
-        if (syncTimeout) clearTimeout(syncTimeout);
-        syncTimeout = setTimeout(() => {
-            const gistId = GM_getValue(GIST_ID_KEY, '');
-            const token = GM_getValue(GIST_TOKEN_KEY, '');
-            if (!gistId || !token) return;
+        const gistId = GM_getValue(GIST_ID_KEY, '');
+        const token = GM_getValue(GIST_TOKEN_KEY, '');
+        if (!gistId || !token) return;
 
-            GM_xmlhttpRequest({
-                method: 'PATCH',
-                url: `https://api.github.com/gists/${gistId}`,
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Accept': 'application/vnd.github.v3+json',
-                    'Content-Type': 'application/json'
-                },
-                data: JSON.stringify({
-                    files: {
-                        [GIST_FILENAME]: {
-                            content: JSON.stringify(gistHistory, null, 2)
-                        }
+        GM_xmlhttpRequest({
+            method: 'PATCH',
+            url: `https://api.github.com/gists/${gistId}`,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json'
+            },
+            data: JSON.stringify({
+                files: {
+                    [GIST_FILENAME]: {
+                        content: JSON.stringify(gistHistory) // Unindented compact JSON stringification
                     }
-                }),
-                onload: function(res) {
-                    if (res.status === 200) gistStatus = 'connected';
-                    else gistStatus = 'error';
-                },
-                onerror: function() { gistStatus = 'error'; }
-            });
-        }, 2500);
+                }
+            }),
+            onload: function(res) {
+                if (res.status === 200) gistStatus = 'connected';
+                else gistStatus = 'error';
+            },
+            onerror: function() { gistStatus = 'error'; }
+        });
     }
 
     function getGainOverHours(records, hours) {
@@ -267,13 +268,12 @@
         return Math.max(0, valid[valid.length - 1].v - rec.v);
     }
 
-    // --- Server Speed Scaled Growth Stats (3 Game Days vs 9 Game Days Window) ---
+    // --- Server Speed Scaled Growth Stats ---
 
     function getSpeedScaledGrowthStats(validRecords, currentValue) {
         const valid = getValidHistory(validRecords);
         const serverSpeed = parseFloat(GM_getValue(SERVER_SPEED_KEY, 3)) || 3;
 
-        // 3 Game Days = (72 / serverSpeed) real hours; 9 Game Days = (216 / serverSpeed) real hours
         const real1Hours = 72 / serverSpeed;
         const real3Hours = 216 / serverSpeed;
         const str1 = formatRealDuration(real1Hours);
@@ -288,7 +288,6 @@
         const real1DayMs = THREE_DAYS_MS / serverSpeed;
         const real3DaysMs = NINE_DAYS_MS / serverSpeed;
 
-        // Primary Window Baseline (3 Game Days)
         const target1Day = now - real1DayMs;
         let rec1Day = valid[0];
         let minDiff1 = Math.abs(rec1Day.t - target1Day);
@@ -297,7 +296,6 @@
             if (diff < minDiff1) { minDiff1 = diff; rec1Day = valid[i]; }
         }
 
-        // Secondary Window Baseline (9 Game Days)
         const target3Days = now - real3DaysMs;
         let rec3Days = valid[0];
         let minDiff3 = Math.abs(rec3Days.t - target3Days);
@@ -333,24 +331,24 @@
 
         let symbol = '▶\uFE0E';
         let status = '▶ Steady pace';
-        let colorStyle = 'color: #6a5a48; font-weight: 400;'; // UI Parchment Brown for Steady
+        let colorStyle = 'color: #6a5a48; font-weight: 400;';
 
         if (gain1Day === 0) {
             symbol = '⏸\uFE0E';
             status = '⏸ Growth paused';
-            colorStyle = 'color: #948e85; font-weight: 400;'; // Disabled Light Muted Gray
+            colorStyle = 'color: #948e85; font-weight: 400;';
         } else if (gain1Day < 0) {
             symbol = '▼\uFE0E';
             status = '▼ Stalled / Declining';
-            colorStyle = 'color: #c5221f; font-weight: 400;'; // Brighter Clear Red
+            colorStyle = 'color: #c5221f; font-weight: 400;';
         } else if (avgPriorDailyGain > 0 && gain1Day > (avgPriorDailyGain * 1.25)) {
             symbol = '▲\uFE0E';
             status = '▲ Accelerating';
-            colorStyle = 'color: #15803d; font-weight: 400;'; // Emerald Green
+            colorStyle = 'color: #15803d; font-weight: 400;';
         } else if (avgPriorDailyGain > 0 && gain1Day < (avgPriorDailyGain * 0.75)) {
             symbol = '▼\uFE0E';
             status = '▼ Slowing down';
-            colorStyle = 'color: #c5221f; font-weight: 400;'; // Brighter Clear Red
+            colorStyle = 'color: #c5221f; font-weight: 400;';
         }
 
         return { percentText, pct3dText, gain1Day, gain3Days, str1, str3, symbol, status, colorStyle };
@@ -598,26 +596,40 @@
                 const lastRec = catHistory[catHistory.length - 1];
 
                 if (!isAlliancePage) {
-                    if (!lastRec || (now - lastRec.t) >= minRecordMs) {
+                    if (!lastRec) {
+                        catHistory.push({ t: now, v: currentValue });
+                        hasNewData = true;
+                    } else if ((now - lastRec.t) < minRecordMs) {
+                        // WITHIN INTERVAL: Override/update latest entry when value changes or slide timestamp forward
+                        if (currentValue !== lastRec.v) {
+                            catHistory[catHistory.length - 1] = { t: now, v: currentValue };
+                            hasNewData = true;
+                        } else {
+                            catHistory[catHistory.length - 1].t = now;
+                        }
+                    } else {
+                        // OUTSIDE INTERVAL: Boundary sampling / flatline compression
                         const len = catHistory.length;
-                        if (len === 0) {
+                        if (currentValue !== lastRec.v) {
                             catHistory.push({ t: now, v: currentValue });
-                        } else if (currentValue !== catHistory[len - 1].v) {
-                            catHistory.push({ t: now, v: currentValue });
+                            hasNewData = true;
                         } else {
                             if (len >= 2 && catHistory[len - 2].v === currentValue) {
                                 catHistory[len - 1].t = now;
                             } else {
                                 catHistory.push({ t: now, v: currentValue });
+                                hasNewData = true;
                             }
                         }
-                        catHistory = catHistory.filter(r => (now - r.t) <= NINETY_DAYS_MS);
-                        catHistory.sort((a, b) => a.t - b.t);
-                        gistHistory[playerName][m.key] = catHistory;
-                        hasNewData = true;
                     }
+
+                    catHistory = catHistory.filter(r => (now - r.t) <= NINETY_DAYS_MS);
+                    catHistory.sort((a, b) => a.t - b.t);
+
+                    // Save in compact array tuple format [t, v]
+                    gistHistory[playerName][m.key] = catHistory.map(r => [r.t, r.v]);
                 } else {
-                    gistHistory[playerName][m.key] = catHistory;
+                    gistHistory[playerName][m.key] = catHistory.map(r => [r.t, r.v]);
                 }
 
                 const stats = getSpeedScaledGrowthStats(catHistory, currentValue);
@@ -655,8 +667,9 @@
 
         saveLocalHistory();
 
+        // Immediate Gist sync on any newly recorded/overridden data
         if (hasNewData && isGistLoaded && !isAlliancePage) {
-            pushToGistDebounced();
+            pushToGistImmediate();
         }
     }
 
@@ -1026,7 +1039,7 @@
                 const statusEl = document.getElementById('tw-gist-status');
                 statusEl.textContent = 'History reset. Syncing to Gist...';
 
-                pushToGistDebounced();
+                pushToGistImmediate();
             }
         };
 
@@ -1054,7 +1067,7 @@
                 const connBadge = document.getElementById('tw-gist-conn-badge');
                 if (success) {
                     embedSettingsInGistHistory();
-                    pushToGistDebounced();
+                    pushToGistImmediate();
                     statusEl.textContent = 'Synced successfully!';
                     if (connBadge) {
                         connBadge.textContent = '🟢 Connected';
