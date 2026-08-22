@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      17.2
+// @version      17.3
 // @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], persistent modal time range selection across player views, parenthesized badge stripping, negative value support, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
@@ -54,6 +54,7 @@
     let activeChart = null;
     let observer = null;
     let selectedChartDays = 3;
+    let escapeHandledFlag = false;
 
     function syncSettingsFromGist(remoteSettings) {
         if (!remoteSettings || typeof remoteSettings !== 'object') return;
@@ -136,7 +137,7 @@
         return `${hours.toFixed(1).replace(/\.0$/, '')}h`;
     }
 
-    document.addEventListener('keydown', (e) => {
+    function handleEscapeKey(e) {
         if (e.key === 'Escape') {
             const trendModal = document.getElementById('tw-trend-modal');
             const gistModal = document.getElementById('tw-gist-modal');
@@ -148,9 +149,20 @@
                 e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
                 if (isTrendOpen) trendModal.style.display = 'none';
                 if (isGistOpen) gistModal.style.display = 'none';
+                escapeHandledFlag = true;
+            } else if (escapeHandledFlag) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                if (e.type === 'keyup') {
+                    escapeHandledFlag = false;
+                }
             }
         }
-    }, true);
+    }
+
+    document.addEventListener('keydown', handleEscapeKey, true);
+    document.addEventListener('keyup', handleEscapeKey, true);
 
     function formatCompact(num, includeSign = false) {
         if (num === null || num === undefined || isNaN(num)) return 'N/A';
@@ -786,11 +798,11 @@
         cfgBtn.style.marginRight = '6px';
         cfgBtn.innerHTML = `<span><span class="sr-only">Gist Config</span><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings size-5"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></span>`;
 
-        cfgBtn.onclick = openGistModal2;
+        cfgBtn.onclick = openGistModal;
         backBtn.parentNode.insertBefore(cfgBtn, backBtn);
     }
 
-    function openGistModal2() {
+    function openGistModal() {
         let modal = document.getElementById('tw-gist-modal');
         if (modal) { modal.style.display = 'flex'; return; }
 
@@ -809,20 +821,25 @@
         const currentTimeFormat = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
         const currentRecordInterval = parseFloat(GM_getValue(RECORD_INTERVAL_KEY, 1));
 
-        let statusText = '⚪ Not Configured';
-        let statusStyle = 'color: #64748b; background: #f1f5f9; border: 1px solid #cbd5e1;';
+        let statusText = '\u25cf Not Configured';
+        let statusStyle = 'color: #6a5a48; background: #ece8d6; border: 1px solid #6a5a48;';
 
         if (gistStatus === 'connected') {
-            statusText = '🟢 Connected'; statusStyle = 'color: #15803d; background: #dcfce7; border: 1px solid #86efac;';
+            statusText = '\u25cf Connected';
+            statusStyle = 'color: #15803d; background: #dcfce7; border: 1px solid #15803d;';
         } else if (gistStatus === 'error') {
-            statusText = '🔴 Disconnected'; statusStyle = 'color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5;';
+            statusText = '\u25cf Disconnected';
+            statusStyle = 'color: #991b1b; background: #fee2e2; border: 1px solid #991b1b;';
         }
 
         modal.innerHTML = `
-            <div style="background: #ece8d6; border: 2px solid #101010; padding: 18px; width: 340px; border-radius: 4px; color: #101010; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <h3 style="font-weight: 600; text-transform: uppercase; font-size: 14px; color: #6a5a48; margin: 0;">Gist Sync Settings</h3>
-                    <span id="tw-gist-conn-badge" style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; ${statusStyle}">${statusText}</span>
+            <div style="background: #ece8d6; border: 2px solid #101010; padding: 20px; width: 360px; max-width: 92vw; border-radius: 4px; color: #101010; box-shadow: 0 4px 16px rgba(0,0,0,0.6);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #dcd3c6; padding-bottom: 6px;">
+                    <h3 style="font-weight: 600; text-transform: uppercase; font-size: 14px; color: #6a5a48; margin: 0;">\u2699 Growth Tracker Settings</h3>
+                    <span id="tw-troop-gist-conn-badge" style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; ${statusStyle}">${statusText}</span>
+                </div>
+                <div style="margin-bottom: 8px; font-size: 11px; color: #6a5a48; font-weight: 500;">
+                    Settings for Growth Tracker component.
                 </div>
                 <div style="margin-bottom: 10px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
@@ -873,10 +890,10 @@
                 </div>
                 <div id="tw-gist-status" style="font-size: 11px; margin-bottom: 12px; color: #165eb9; font-weight: 600;"></div>
                 <div style="display: flex; gap: 8px; justify-content: space-between;">
-                    <button type="button" id="tw-btn-reset-modal" style="background: #dc2626; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px;">Reset History</button>
+                    <button type="button" id="tw-btn-reset-modal" style="background: #991b1b; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px; text-transform: uppercase;">Reset History</button>
                     <div style="display: flex; gap: 8px;">
-                        <button type="button" id="tw-btn-close-modal" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px;">Close</button>
-                        <button type="button" id="tw-btn-save-modal" style="background: #165eb9; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px;">Save & Sync</button>
+                        <button type="button" id="tw-btn-close-modal" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px; text-transform: uppercase;">Close</button>
+                        <button type="button" id="tw-btn-save-modal" style="background: #165eb9; color: #fff; border: 1px solid #101010; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 3px; text-transform: uppercase;">Save & Sync</button>
                     </div>
                 </div>
             </div>
