@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      16.4
-// @description  Tracks leaderboard columns individually, displays inline server-speed scaled growth percentages with momentum-based dynamic theme color coding, compact array tuple storage [timestamp, value], immediate Gist sync on value change, within-interval sample overriding, two-point flatline compression, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history (with settings sync & connection indicator), live plot data injection at Date.now(), dynamic metric projections, clean text tooltips, and Travian strategy modal.
+// @version      16.5
+// @description  Tracks leaderboard columns individually, displays inline server-speed scaled growth percentages with momentum-based dynamic theme color coding, compact array tuple storage [timestamp, value], debounced Gist sync, robust two-point flatline boundary sampling, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history (with settings sync & connection indicator), live plot data injection at Date.now(), dynamic metric projections, clean text tooltips, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -41,6 +41,7 @@
 
     let isGistLoaded = false;
     let gistStatus = 'not_configured'; // 'connected', 'error', 'not_configured'
+    let syncTimeout = null;
     let activeChart = null;
 
     // --- Settings Sync Helpers (__config__ Namespace) ---
@@ -223,35 +224,38 @@
         });
     }
 
-    function pushToGistImmediate() {
+    function pushToGistDebounced() {
         embedSettingsInGistHistory();
         saveLocalHistory();
 
-        const gistId = GM_getValue(GIST_ID_KEY, '');
-        const token = GM_getValue(GIST_TOKEN_KEY, '');
-        if (!gistId || !token) return;
+        if (syncTimeout) clearTimeout(syncTimeout);
+        syncTimeout = setTimeout(() => {
+            const gistId = GM_getValue(GIST_ID_KEY, '');
+            const token = GM_getValue(GIST_TOKEN_KEY, '');
+            if (!gistId || !token) return;
 
-        GM_xmlhttpRequest({
-            method: 'PATCH',
-            url: `https://api.github.com/gists/${gistId}`,
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json'
-            },
-            data: JSON.stringify({
-                files: {
-                    [GIST_FILENAME]: {
-                        content: JSON.stringify(gistHistory) // Unindented compact JSON stringification
+            GM_xmlhttpRequest({
+                method: 'PATCH',
+                url: `https://api.github.com/gists/${gistId}`,
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Accept': 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json'
+                },
+                data: JSON.stringify({
+                    files: {
+                        [GIST_FILENAME]: {
+                            content: JSON.stringify(gistHistory) // Compact unindented JSON stringification
+                        }
                     }
-                }
-            }),
-            onload: function(res) {
-                if (res.status === 200) gistStatus = 'connected';
-                else gistStatus = 'error';
-            },
-            onerror: function() { gistStatus = 'error'; }
-        });
+                }),
+                onload: function(res) {
+                    if (res.status === 200) gistStatus = 'connected';
+                    else gistStatus = 'error';
+                },
+                onerror: function() { gistStatus = 'error'; }
+            });
+        }, 1200);
     }
 
     function getGainOverHours(records, hours) {
@@ -597,29 +601,23 @@
 
                 if (!isAlliancePage) {
                     if (!lastRec) {
+                        // 1. Initial record
                         catHistory.push({ t: now, v: currentValue });
                         hasNewData = true;
-                    } else if ((now - lastRec.t) < minRecordMs) {
-                        // WITHIN INTERVAL: Override/update latest entry when value changes or slide timestamp forward
-                        if (currentValue !== lastRec.v) {
-                            catHistory[catHistory.length - 1] = { t: now, v: currentValue };
-                            hasNewData = true;
-                        } else {
-                            catHistory[catHistory.length - 1].t = now;
-                        }
+                    } else if (currentValue !== lastRec.v) {
+                        // 2. Value changed: ALWAYS append new record to keep historical progression/baseline intact
+                        catHistory.push({ t: now, v: currentValue });
+                        hasNewData = true;
                     } else {
-                        // OUTSIDE INTERVAL: Boundary sampling / flatline compression
-                        const len = catHistory.length;
-                        if (currentValue !== lastRec.v) {
-                            catHistory.push({ t: now, v: currentValue });
-                            hasNewData = true;
-                        } else {
+                        // 3. Value unchanged: Only update or add boundary end-marker outside interval
+                        if ((now - lastRec.t) >= minRecordMs) {
+                            const len = catHistory.length;
                             if (len >= 2 && catHistory[len - 2].v === currentValue) {
-                                catHistory[len - 1].t = now;
+                                catHistory[len - 1].t = now; // Slide existing boundary marker
                             } else {
-                                catHistory.push({ t: now, v: currentValue });
-                                hasNewData = true;
+                                catHistory.push({ t: now, v: currentValue }); // Establish second boundary marker
                             }
+                            hasNewData = true;
                         }
                     }
 
@@ -667,9 +665,8 @@
 
         saveLocalHistory();
 
-        // Immediate Gist sync on any newly recorded/overridden data
         if (hasNewData && isGistLoaded && !isAlliancePage) {
-            pushToGistImmediate();
+            pushToGistDebounced();
         }
     }
 
@@ -1039,7 +1036,7 @@
                 const statusEl = document.getElementById('tw-gist-status');
                 statusEl.textContent = 'History reset. Syncing to Gist...';
 
-                pushToGistImmediate();
+                pushToGistDebounced();
             }
         };
 
@@ -1067,7 +1064,7 @@
                 const connBadge = document.getElementById('tw-gist-conn-badge');
                 if (success) {
                     embedSettingsInGistHistory();
-                    pushToGistImmediate();
+                    pushToGistDebounced();
                     statusEl.textContent = 'Synced successfully!';
                     if (connBadge) {
                         connBadge.textContent = '🟢 Connected';
