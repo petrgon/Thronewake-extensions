@@ -74,3 +74,18 @@ An interactive travel duration, distance, and UTC arrival time calculator built 
 <p align="left">
   <img width="731" height="821" alt="image" src="https://github.com/user-attachments/assets/76a339d8-2c57-4fe1-a348-61c9443db570" />
 </p>
+
+### 3. [Thronewake - Troop & Intelligence Tracker](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20-%20Troop%20%26%20Intelligence%20Tracker.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20-%20Troop%20%26%20Intelligence%20Tracker.js))
+Automatically gathers combat report data to track player garrisons, calculate offensive hammer power (HMR) and defense (DEF), and synchronize intelligence across your devices.
+
+* **Automated Combat Report Parsing**: Automatically records surviving unit counts from scanned combat reports, intelligently accumulating split attacks occurring within a 1-hour window.
+* **Unified In-Game Power Badges**: Injects clean, native-styled `HMR` and `DEF` indicators across Player profile pages, Alliance member lists, and Village detail views.
+* **Interactive Statistics Modal**: Click any power badge to open a detailed breakdown modal displaying aggregate unit counts, total offensive/defensive values, and per-village garrison histories.
+* **Native Collapsible UI Cards**: Injects seamless "Troop Intelligence" panels with paper-theme toggle controls positioned above village listings and village action blocks.
+* **Gist Cloud Synchronization**: Syncs your cross-player intelligence database remotely using GitHub Gists with a compact JSON format for minimal bandwidth usage.
+* **Configurable Time Preferences**: Supports toggling timestamp displays between 24-hour Local Time and UTC formats directly from the configuration menu.
+
+<p align="left">
+  <img width="642" height="520" alt="image" src="https://github.com/user-attachments/assets/a99e81d2-5e4a-4320-9f80-d09cd87c6fec" />
+  <img width="620" height="249" alt="image" src="https://github.com/user-attachments/assets/bfabfbbb-f46e-4df7-8e58-0b171dfc8e33" />
+</p>
