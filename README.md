@@ -75,7 +75,7 @@ An interactive travel duration, distance, and UTC arrival time calculator built 
   <img width="731" height="821" alt="image" src="https://github.com/user-attachments/assets/76a339d8-2c57-4fe1-a348-61c9443db570" />
 </p>
 
-### 3. [Thronewake - Troop & Intelligence Tracker](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20-%20Troop%20%26%20Intelligence%20Tracker.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20-%20Troop%20%26%20Intelligence%20Tracker.js))
+### 3. [Thronewake - Troop & Intelligence Tracker](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Troop%20%26%20Intelligence%20Tracker.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20Troop%20%26%20Intelligence%20Tracker.js))
 Automatically gathers combat report data to track player garrisons, calculate offensive hammer power (HMR) and defense (DEF), and synchronize intelligence across your devices.
 
 * **Automated Combat Report Parsing**: Automatically records surviving unit counts from scanned combat reports, intelligently accumulating split attacks occurring within a 1-hour window.
