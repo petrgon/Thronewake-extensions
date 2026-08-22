@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake - Empire Defense Tracker
 // @namespace    violentmonkey-thronewake-troops
-// @version      6.5
-// @description  Tracks empire defense troops (including Emberblades). Uses shield icon in copied clipboard summary.
+// @version      7.3
+// @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown.
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -15,22 +15,32 @@
 
   GM_addStyle(`
     #tw-empire-troop-card {
-      background-color: #ece8d6; /* --color-paper-light */
-      color: #101010; /* --color-black */
+      background-color: #ece8d6;
+      color: #101010;
       border: 2px solid #101010;
       border-radius: 4px;
       box-shadow: inset 0 0 8px rgba(16, 16, 16, 0.25), 0 4px 6px -1px rgba(0, 0, 0, 0.2);
       padding: 4px 8px;
       font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 13px;
-      font-weight: 600;
+      font-size: 15px;
+      font-weight: 400;
       user-select: none;
       box-sizing: border-box;
       pointer-events: auto;
       cursor: pointer;
       transition: background-color 0.15s ease;
       width: 100%;
-      max-width: 170px;
+      max-width: 195px;
+      touch-action: manipulation;
+    }
+
+    @media (max-width: 640px) {
+      #tw-empire-troop-card {
+        max-width: 92vw;
+        margin: 2px auto;
+        padding: 4px 6px;
+        font-size: 13px;
+      }
     }
 
     #tw-empire-troop-card:hover {
@@ -46,10 +56,10 @@
       align-items: center;
       justify-content: space-between;
       gap: 4px;
-      font-weight: 700;
+      font-weight: 400;
       border-bottom: 1px solid rgba(16, 16, 16, 0.2);
-      padding-bottom: 3px;
-      margin-bottom: 3px;
+      padding-bottom: 2px;
+      margin-bottom: 2px;
     }
 
     .tw-card-title-group {
@@ -58,12 +68,26 @@
       gap: 4px;
     }
 
+    .tw-card-sync-group {
+      display: none;
+      align-items: center;
+      gap: 3px;
+    }
+
+    #tw-empire-troop-card:hover:not(.is-copied) .tw-card-title-group {
+      display: none;
+    }
+
+    #tw-empire-troop-card:hover:not(.is-copied) .tw-card-sync-group {
+      display: flex;
+    }
+
     .tw-card-title {
-      color: #8a6e46; /* --color-brown */
+      color: #8a6e46;
       font-family: "Josefin Sans Variable", sans-serif;
-      font-weight: 700;
+      font-weight: 400;
       text-transform: uppercase;
-      font-size: 11px;
+      font-size: 13px;
       letter-spacing: 0.03em;
       transition: color 0.15s ease;
     }
@@ -73,7 +97,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 4px;
-      font-size: 12px;
+      font-size: 14px;
       padding-top: 1px;
     }
 
@@ -88,47 +112,42 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 12px;
-      height: 12px;
+      width: 14px;
+      height: 14px;
       color: #8a6e46;
     }
 
     .tw-card-val {
-      font-weight: 700;
-      font-size: 12px;
+      font-weight: 400;
+      font-size: 14px;
       color: #101010;
       font-variant-numeric: lining-nums;
     }
 
     .tw-copied-label {
-      color: #165eb9 !important; /* Flash blue on copy */
+      color: #165eb9 !important;
     }
   `);
 
   const ICONS = {
-    defense: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
-    infantry: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
-    cavalry: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20l14-14"/><path d="M19 6h-4V2"/><path d="M14 6l3 3"/></svg>`,
-    scout: `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`
+    defense: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+    house: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
+    infantry: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+    cavalry: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20l14-14"/><path d="M19 6h-4V2"/><path d="M14 6l3 3"/></svg>`,
+    scout: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`
   };
 
   const DEF_INF_UNITS = ["emberblade", "ember", "shieldbearer", "axeborn", "briar guard", "monolith warden", "carved warrior"];
   const DEF_CAV_UNITS = ["fang rider", "green lancer", "slate rider"];
   const SCOUT_UNITS   = ["sentinel", "pathstalker", "wind scout", "scout", "pathfinder", "spy", "watcher"];
 
+  let resetCopyTimeout = null;
+
   function getTroopMatch(text) {
     const lower = text.toLowerCase().trim();
-
-    for (const u of SCOUT_UNITS) {
-      if (lower.includes(u)) return { category: "scout", unit: u };
-    }
-    for (const u of DEF_INF_UNITS) {
-      if (lower.includes(u)) return { category: "def_inf", unit: u };
-    }
-    for (const u of DEF_CAV_UNITS) {
-      if (lower.includes(u)) return { category: "def_cav", unit: u };
-    }
-
+    for (const u of SCOUT_UNITS) { if (lower.includes(u)) return { category: "scout", unit: u }; }
+    for (const u of DEF_INF_UNITS) { if (lower.includes(u)) return { category: "def_inf", unit: u }; }
+    for (const u of DEF_CAV_UNITS) { if (lower.includes(u)) return { category: "def_cav", unit: u }; }
     return null;
   }
 
@@ -139,11 +158,7 @@
       totalVillages = select.options.length;
       const selectedOption = select.options[select.selectedIndex] || select.querySelector('option[selected]');
       if (selectedOption) {
-        return {
-          id: selectedOption.value || selectedOption.textContent.trim(),
-          name: selectedOption.textContent.trim(),
-          totalVillages
-        };
+        return { id: selectedOption.value || selectedOption.textContent.trim(), name: selectedOption.textContent.trim(), totalVillages };
       }
     }
 
@@ -161,9 +176,7 @@
     for (const span of srSpans) {
       if (span.textContent.trim() === 'Food consumption') {
         const container = span.closest('div.fixed');
-        if (container && container.offsetWidth > 0 && container.offsetHeight > 0) {
-          return true;
-        }
+        if (container && container.offsetWidth > 0 && container.offsetHeight > 0) return true;
       }
     }
     return false;
@@ -173,12 +186,7 @@
     const lis = document.querySelectorAll('main ~ div ul li, div.fixed.bottom-0 ul li');
     if (!lis || lis.length === 0) return null;
 
-    const data = {
-      total: 0, // Strictly Def Inf + Def Cav
-      categories: { def_inf: 0, def_cav: 0, scout: 0 },
-      details: { def_inf: [], def_cav: [], scout: [] }
-    };
-
+    const data = { total: 0, categories: { def_inf: 0, def_cav: 0, scout: 0 }, details: { def_inf: [], def_cav: [], scout: [] } };
     let foundAny = false;
 
     lis.forEach(li => {
@@ -206,7 +214,7 @@
     return foundAny ? data : null;
   }
 
-  function copySummaryToClipboard() {
+  function copySummaryToClipboard(fullData = false) {
     const registry = GM_getValue("tw_empire_registry", {});
     const info = getVillageInfo();
     const recordedIds = Object.keys(registry);
@@ -236,32 +244,31 @@
         if (scout > 0) parts.push(`Scout: ${scout.toLocaleString()}`);
 
         let detailsStr = parts.length > 0 ? ` (${parts.join(' | ')})` : '';
-
-        villageList.push({
-          name: cleanName,
-          text: `• ${cleanName}: ${vTotal.toLocaleString()} def${detailsStr}`
-        });
+        villageList.push({ name: cleanName, text: `• ${cleanName}: ${vTotal.toLocaleString()} def${detailsStr}` });
       }
     });
 
     villageList.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-
-    const villageLines = villageList.map(v => v.text);
 
     let catSummaryParts = [];
     if (cats.def_inf > 0) catSummaryParts.push(`🛡️ Def Inf: ${cats.def_inf.toLocaleString()}`);
     if (cats.def_cav > 0) catSummaryParts.push(`🐴 Def Cav: ${cats.def_cav.toLocaleString()}`);
     if (cats.scout > 0) catSummaryParts.push(`👁️ Scouts: ${cats.scout.toLocaleString()}`);
 
-    const catSummaryLine = catSummaryParts.length > 0 ? catSummaryParts.join(' | ') : 'No Defense Troops';
+    let summaryText = "";
+    let copiedMsg = fullData ? "FULL COPIED!" : "COPIED!";
 
-    const summaryText = [
-      `🛡️ Empire Defense Summary (${recordedIds.length}/${info.totalVillages || recordedIds.length} Villages)`,
-      `Total Defense: ${total.toLocaleString()}`,
-      catSummaryLine,
-      `\nVillage Breakdown:`,
-      ...villageLines
-    ].join('\n');
+    if (fullData) {
+      summaryText = [
+        `🛡️ Empire Defense Summary (${recordedIds.length}/${info.totalVillages || recordedIds.length} Villages)`,
+        `Total Defense: ${total.toLocaleString()}`,
+        catSummaryParts.length > 0 ? catSummaryParts.join(' | ') : 'No Defense Troops',
+        `\nVillage Breakdown:`,
+        ...villageList.map(v => v.text)
+      ].join('\n');
+    } else {
+      summaryText = catSummaryParts.length > 0 ? catSummaryParts.join(' | ') : 'No Defense Troops';
+    }
 
     if (typeof GM_setClipboard === 'function') {
       GM_setClipboard(summaryText);
@@ -269,14 +276,21 @@
       navigator.clipboard.writeText(summaryText);
     }
 
+    const cardEl = document.getElementById("tw-empire-troop-card");
+    if (cardEl) cardEl.classList.add("is-copied");
+
     const labelEl = document.getElementById("tw-label-empire");
     if (labelEl) {
-      const originalText = labelEl.textContent;
-      labelEl.textContent = "COPIED!";
+      if (resetCopyTimeout) clearTimeout(resetCopyTimeout);
+
+      labelEl.textContent = copiedMsg;
       labelEl.classList.add("tw-copied-label");
-      setTimeout(() => {
-        labelEl.textContent = originalText;
+
+      resetCopyTimeout = setTimeout(() => {
+        labelEl.textContent = "DEFENSE";
         labelEl.classList.remove("tw-copied-label");
+        if (cardEl) cardEl.classList.remove("is-copied");
+        resetCopyTimeout = null;
       }, 1500);
     }
   }
@@ -289,7 +303,7 @@
 
     const card = document.createElement("div");
     card.id = "tw-empire-troop-card";
-    card.title = "Click to copy Empire Defense Summary to Clipboard";
+    card.title = "Single Click: Copy Stats | Double Click: Copy Full Breakdown";
 
     card.innerHTML = `
       <div class="tw-card-top">
@@ -297,42 +311,61 @@
           <span class="tw-card-icon">${ICONS.defense}</span>
           <span class="tw-card-title" id="tw-label-empire">DEFENSE</span>
         </div>
+        <div class="tw-card-sync-group" title="Villages synced in the last hour">
+          <span class="tw-card-icon">${ICONS.house}</span>
+          <span id="tw-val-sync" class="tw-card-title">0/0</span>
+        </div>
         <span id="tw-val-empire" class="tw-card-val">—</span>
       </div>
       <div class="tw-card-bottom-row">
-        <div class="tw-card-sub-item" title="Defensive Infantry (Emberblade, Shieldbearer, Axeborn, Briar Guard)">
+        <div class="tw-card-sub-item" title="Defensive Infantry">
           <span class="tw-card-icon">${ICONS.infantry}</span>
           <span id="tw-val-def_inf" class="tw-card-val">0</span>
         </div>
-        <div class="tw-card-sub-item" title="Defensive Cavalry (Fang Rider, Green Lancer)">
+        <div class="tw-card-sub-item" title="Defensive Cavalry">
           <span class="tw-card-icon">${ICONS.cavalry}</span>
           <span id="tw-val-def_cav" class="tw-card-val">0</span>
         </div>
-        <div class="tw-card-sub-item" title="Scouts (Sentinel, Pathstalker, Wind Scout)">
+        <div class="tw-card-sub-item" title="Scouts">
           <span class="tw-card-icon">${ICONS.scout}</span>
           <span id="tw-val-scout" class="tw-card-val">0</span>
         </div>
       </div>
     `;
 
-    card.addEventListener("click", copySummaryToClipboard);
+    let clickTimer = null;
+    card.addEventListener("click", () => {
+      if (clickTimer === null) {
+        clickTimer = setTimeout(() => {
+          clickTimer = null;
+          copySummaryToClipboard(false);
+        }, 800);
+      } else {
+        clearTimeout(clickTimer);
+        clickTimer = null;
+        copySummaryToClipboard(true);
+      }
+    });
+
     sideMenuContainer.insertBefore(card, sideMenuContainer.firstChild);
   }
 
   function calculateAndRenderEmpireTotals() {
     const registry = GM_getValue("tw_empire_registry", {});
+    const totals = { grandTotal: 0, categories: { def_inf: 0, def_cav: 0, scout: 0 }, villageList: [] };
 
-    const totals = {
-      grandTotal: 0,
-      categories: { def_inf: 0, def_cav: 0, scout: 0 },
-      villageList: []
-    };
+    const ONE_HOUR = 60 * 60 * 1000;
+    const now = Date.now();
+    let syncedLastHour = 0;
+    const activeInfo = getVillageInfo();
 
-    const recordedIds = Object.keys(registry);
-
-    recordedIds.forEach(id => {
+    Object.keys(registry).forEach(id => {
       const vData = registry[id];
       if (vData && vData.data) {
+        if (vData.updatedAt && (now - vData.updatedAt < ONE_HOUR)) {
+          syncedLastHour++;
+        }
+
         const defInf = (vData.data.categories && vData.data.categories.def_inf) || 0;
         const defCav = (vData.data.categories && vData.data.categories.def_cav) || 0;
         const scout = (vData.data.categories && vData.data.categories.scout) || 0;
@@ -344,7 +377,6 @@
         totals.categories.scout += scout;
 
         const cleanName = vData.name.replace(/\s*\(-?\d+\|-?\d+\)/, '');
-
         let parts = [];
         if (defInf > 0) parts.push(`Inf: ${defInf.toLocaleString()}`);
         if (defCav > 0) parts.push(`Cav: ${defCav.toLocaleString()}`);
@@ -355,8 +387,11 @@
       }
     });
 
+    const totalVillages = Math.max(activeInfo.totalVillages || 1, Object.keys(registry).length);
+    const syncEl = document.getElementById("tw-val-sync");
+    if (syncEl) syncEl.textContent = `${syncedLastHour}/${totalVillages}`;
+
     totals.villageList.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-    const villageBreakdown = totals.villageList.map(v => v.text);
 
     const empireEl = document.getElementById("tw-val-empire");
     if (empireEl) empireEl.textContent = totals.grandTotal.toLocaleString();
@@ -368,18 +403,13 @@
 
     const card = document.getElementById("tw-empire-troop-card");
     if (card) {
-      card.title = `DEFENSE BREAKDOWN BY VILLAGE (Click to copy):\n` +
-        (villageBreakdown.length > 0 ? villageBreakdown.join("\n") : "Open villages to record troops.");
+      card.title = `Single Click: Copy Stats | Double Click: Copy Full Breakdown\n\n` +
+        (totals.villageList.length > 0 ? totals.villageList.map(v => v.text).join("\n") : "Open villages to record troops.");
     }
   }
 
-  let currentVillage = getVillageInfo();
-
   setInterval(() => {
-    const upkeepActive = isUpkeepVisible();
-    const card = document.getElementById("tw-empire-troop-card");
-
-    if (upkeepActive) {
+    if (isUpkeepVisible()) {
       createCard();
       const activeCard = document.getElementById("tw-empire-troop-card");
       if (activeCard) activeCard.style.display = "block";
@@ -389,19 +419,13 @@
 
       if (liveData !== null) {
         const registry = GM_getValue("tw_empire_registry", {});
-        registry[activeVillage.id] = {
-          name: activeVillage.name,
-          updatedAt: Date.now(),
-          data: liveData
-        };
+        registry[activeVillage.id] = { name: activeVillage.name, updatedAt: Date.now(), data: liveData };
         GM_setValue("tw_empire_registry", registry);
       }
-
-      currentVillage = activeVillage;
       calculateAndRenderEmpireTotals();
     } else {
+      const card = document.getElementById("tw-empire-troop-card");
       if (card) card.style.display = "none";
     }
   }, 500);
-
 })();
