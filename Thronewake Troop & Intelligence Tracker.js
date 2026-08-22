@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Troop & Intelligence Tracker
 // @namespace    http://tampermonkey.net/
-// @version      3.5
-// @description  High-performance troop tracking with unified badge styling, native collapsible village panel, Village screen settings button, compact JSON Gist sync, and strict Escape key isolation.
+// @version      4.0
+// @description  High-performance troop tracking with native back-button config style, collapsible player & village intel sections precisely targeted before the Villages container, 24h UTC/Local time settings, compact JSON Gist sync, and strict Escape key isolation.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -55,6 +55,7 @@
     const KEY_GIST_TOKEN = 'tw_gist_token';
     const KEY_GIST_ID    = 'tw_gist_id';
     const KEY_INTEL_DATA = 'tw_troop_intel_db';
+    const KEY_TIMEZONE   = 'tw_timezone_pref';
 
     let dbCache = null;
     let summaryCache = new Map();
@@ -117,7 +118,7 @@
         if (path.includes('/reports/combat')) {
             return 'report';
         }
-        if (path.includes('/player/')) {
+        if (path.includes('/player/') || path.includes('/map/player/')) {
             return 'player';
         }
         if (path.includes('/alliance/')) {
@@ -133,6 +134,10 @@
         }
 
         if (document.getElementById('village-scroll-container')) {
+            const h2 = document.querySelector('#village-scroll-container h2');
+            if (h2 && h2.textContent.trim().toLowerCase() === 'villages') {
+                return 'player';
+            }
             return 'village';
         }
 
@@ -158,7 +163,23 @@
     function formatTimestamp(sec) {
         if (!sec) return 'N/A';
         const date = new Date(sec * 1000);
-        return date.toLocaleString();
+        const tzPref = GM_getValue(KEY_TIMEZONE, 'local');
+        const options = {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        };
+
+        if (tzPref === 'utc') {
+            options.timeZone = 'UTC';
+        }
+
+        const formatted = new Intl.DateTimeFormat('en-GB', options).format(date);
+        return tzPref === 'utc' ? `${formatted} UTC` : formatted;
     }
 
     function getIntelDB() {
@@ -323,6 +344,7 @@
 
         const currentGistId = GM_getValue(KEY_GIST_ID, '');
         const currentToken = GM_getValue(KEY_GIST_TOKEN, '');
+        const currentTz = GM_getValue(KEY_TIMEZONE, 'local');
 
         let statusText = '\u25cf Not Configured';
         let statusStyle = 'color: #6a5a48; background: #ece8d6; border: 1px solid #6a5a48;';
@@ -351,9 +373,16 @@
                     </div>
                     <input type="text" id="tw-troop-input-gist-id" value="${currentGistId}" placeholder="e.g. 872976f2aa4ecec..." style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px; color: #101010;" />
                 </div>
-                <div style="margin-bottom: 12px;">
+                <div style="margin-bottom: 10px;">
                     <label style="font-size: 11px; font-weight: 600; display: block; color: #6a5a48; text-transform: uppercase; margin-bottom: 3px;">GitHub Token</label>
                     <input type="password" id="tw-troop-input-gist-token" value="${currentToken}" placeholder="ghp_YOUR_TOKEN" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px; color: #101010;" />
+                </div>
+                <div style="margin-bottom: 12px;">
+                    <label style="font-size: 11px; font-weight: 600; display: block; color: #6a5a48; text-transform: uppercase; margin-bottom: 3px;">Time Format</label>
+                    <select id="tw-troop-input-tz" style="width: 100%; border: 1px solid #101010; background: #f8f4e6; padding: 6px; font-size: 12px; box-sizing: border-box; border-radius: 3px; color: #101010;">
+                        <option value="local" ${currentTz === 'local' ? 'selected' : ''}>Local Time (24h)</option>
+                        <option value="utc" ${currentTz === 'utc' ? 'selected' : ''}>UTC (24h)</option>
+                    </select>
                 </div>
                 <div id="tw-troop-gist-status-msg" style="font-size: 11px; margin-bottom: 12px; color: #6a5a48; font-weight: 600; min-height: 16px;"></div>
                 <div style="display: flex; gap: 8px; justify-content: space-between;">
@@ -384,10 +413,12 @@
         document.getElementById('tw-troop-btn-save-modal').onclick = () => {
             const gistId = document.getElementById('tw-troop-input-gist-id').value.trim();
             const token = document.getElementById('tw-troop-input-gist-token').value.trim();
+            const tzPref = document.getElementById('tw-troop-input-tz').value;
             const statusMsg = document.getElementById('tw-troop-gist-status-msg');
 
             GM_setValue(KEY_GIST_ID, gistId);
             GM_setValue(KEY_GIST_TOKEN, token);
+            GM_setValue(KEY_TIMEZONE, tzPref);
 
             statusMsg.textContent = 'Syncing remote database...';
             fetchFromGist(() => {
@@ -548,7 +579,6 @@
             return;
         }
 
-        // Align container horizontally
         navContainer.style.display = 'flex';
         navContainer.style.flexDirection = 'row';
         navContainer.style.alignItems = 'center';
@@ -558,13 +588,16 @@
         const oldBtn = document.getElementById('tw-troop-gist-config-btn');
         if (oldBtn) oldBtn.remove();
 
+        const firstSibling = navContainer.querySelector('button, a');
+        const refClass = firstSibling ? firstSibling.className : 'font-button select-none whitespace-nowrap flex pointer-events-auto cursor-pointer hover:before:bg-paper-brown/90 paper-border before:outline before:outline-paper-creme/40 before:-outline-offset-3 paper paper-bg-paper-brown paper-text-paper-white flex-wrap items-center justify-center gap-2 px-3 py-1 text-xl font-bold uppercase shadow-lg transition-colors disabled:brightness-90 disabled:cursor-not-allowed disabled:text-paper-white/60 mr-2 inline-flex p-1! shadow-none! before:rounded-full before:bg-paper-lightbrown hover:before:bg-paper-brown!';
+
         const newBtn = document.createElement('button');
         newBtn.id = 'tw-troop-gist-config-btn';
         newBtn.type = 'button';
+        newBtn.className = refClass;
         newBtn.title = 'Configure Troop Tracker';
-        newBtn.className = 'font-button select-none whitespace-nowrap flex pointer-events-auto cursor-pointer hover:before:bg-paper-brown/90 paper-border before:outline before:outline-paper-creme/40 before:-outline-offset-3 paper paper-bg-paper-brown paper-text-paper-white items-center justify-center gap-2 px-3 py-1 text-xl font-bold uppercase shadow-lg transition-colors disabled:brightness-90 disabled:cursor-not-allowed disabled:text-paper-white/60 mr-2 inline-flex p-1! shadow-none! before:rounded-full before:bg-paper-lightbrown hover:before:bg-paper-brown!';
         newBtn.style.marginRight = '6px';
-        newBtn.innerHTML = `<span><span class="sr-only">Troop Gist Config</span><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings size-5"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 0 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></span>`;
+        newBtn.innerHTML = `<span><span class="sr-only">Troop Gist Config</span><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings size-5"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></span>`;
 
         newBtn.addEventListener('click', (e) => {
             e.preventDefault();
@@ -670,28 +703,112 @@
     }
 
     function injectPlayerPage() {
-        const playerAnchor = document.querySelector('dd a[href*="/player/"]');
-        if (!playerAnchor) return;
+        let playerName = null;
 
-        const playerName = playerAnchor.textContent.trim();
-        const container = playerAnchor.closest('.flex.flex-col');
+        const urlMatch = window.location.pathname.match(/\/(?:map\/)?player\/([^/?#]+)/i);
+        if (urlMatch) {
+            playerName = decodeURIComponent(urlMatch[1]).trim();
+        }
 
-        if (container && !document.getElementById('tw-troop-player-intel-summary')) {
+        const rootNode = document.getElementById('village-scroll-container') || document;
+
+        if (!playerName) {
+            const h1 = rootNode.querySelector('h1.font-title, h1');
+            if (h1) playerName = h1.textContent.trim();
+        }
+
+        if (!playerName) {
+            const playerAnchor = rootNode.querySelector('dd a[href*="/player/"]');
+            if (playerAnchor) playerName = playerAnchor.textContent.trim();
+        }
+
+        if (!playerName) return;
+
+        // Locate the Villages wrapper (<div class="flex flex-col"><h2 ...>Villages</h2>...)
+        let villagesDiv = null;
+        const headings = rootNode.querySelectorAll('h2');
+        for (let h = 0; h < headings.length; h++) {
+            if (headings[h].textContent.trim().toLowerCase() === 'villages') {
+                villagesDiv = headings[h].closest('.flex.flex-col') || headings[h].parentElement;
+                break;
+            }
+        }
+
+        if (!villagesDiv) {
+            const table = rootNode.querySelector('table');
+            if (table) villagesDiv = table.closest('.flex.flex-col') || table.parentElement;
+        }
+
+        if (!villagesDiv || !villagesDiv.parentElement) return;
+
+        const existingPanel = document.getElementById('tw-troop-player-intel-panel');
+        const isCorrectlyPlaced = existingPanel &&
+            existingPanel.dataset.player === playerName &&
+            existingPanel.nextElementSibling === villagesDiv &&
+            villagesDiv.parentElement.contains(existingPanel);
+
+        if (!isCorrectlyPlaced) {
+            if (existingPanel) existingPanel.remove();
+
             const { maxHammer, totalDef } = getPlayerSummary(playerName);
-            const intelDiv = document.createElement('div');
-            intelDiv.id = 'tw-troop-player-intel-summary';
-            intelDiv.className = 'flex gap-2 mt-1 pt-1 border-t border-paper-creme cursor-pointer';
-            intelDiv.title = 'Click for full troop statistics';
-            intelDiv.onclick = () => openTroopBreakdownModal(playerName);
 
-            intelDiv.innerHTML = createBadgeMarkup(maxHammer, totalDef, 'MAX HMR', 'TOTAL DEF');
-            container.appendChild(intelDiv);
+            const panel = document.createElement('div');
+            panel.id = 'tw-troop-player-intel-panel';
+            panel.dataset.player = playerName;
+            panel.className = 'border-paper-creme flex flex-col gap-2 border-t-2 pt-3';
+
+            panel.innerHTML = `
+                <div class="relative flex items-center justify-between gap-2">
+                    <h3 class="hyphens-auto text-base font-semibold uppercase">Troop Intelligence</h3>
+                    <span class="paper paper-border paper-bg-blue text-paper-white pointer-events-none flex size-5 shrink-0 items-center justify-center before:rounded-full">
+                        <svg class="tw-troop-player-chevron-icon lucide lucide-chevrons-up size-4" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 11-5-5-5 5"></path><path d="m17 18-5-5-5 5"></path></svg>
+                    </span>
+                    <button type="button" class="tw-troop-player-toggle-btn hover:bg-paper-creme/25 absolute inset-0 cursor-pointer rounded-md transition-colors" aria-expanded="true" aria-label="Toggle Troop Intelligence">
+                        <span class="sr-only">Toggle Troop Intelligence</span>
+                    </button>
+                </div>
+                <div class="tw-troop-player-panel-body flex flex-col gap-2 mt-1">
+                    <div class="tw-troop-player-modal-trigger cursor-pointer" title="Click for full troop statistics">
+                        ${createBadgeMarkup(maxHammer, totalDef, 'MAX HMR', 'TOTAL DEF')}
+                    </div>
+                </div>
+            `;
+
+            const toggleBtn = panel.querySelector('.tw-troop-player-toggle-btn');
+            const bodyEl = panel.querySelector('.tw-troop-player-panel-body');
+            const iconSvg = panel.querySelector('.tw-troop-player-chevron-icon');
+
+            if (toggleBtn && bodyEl) {
+                toggleBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const isHidden = bodyEl.style.display === 'none';
+                    bodyEl.style.display = isHidden ? 'flex' : 'none';
+                    toggleBtn.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+                    if (iconSvg) {
+                        iconSvg.innerHTML = isHidden
+                            ? '<path d="m17 11-5-5-5 5"></path><path d="m17 18-5-5-5 5"></path>'
+                            : '<path d="m7 6 5 5 5-5"></path><path d="m7 13 5 5 5-5"></path>';
+                    }
+                });
+            }
+
+            const modalTrigger = panel.querySelector('.tw-troop-player-modal-trigger');
+            if (modalTrigger) {
+                modalTrigger.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openTroopBreakdownModal(playerName);
+                });
+            }
+
+            villagesDiv.parentElement.insertBefore(panel, villagesDiv);
         }
 
         const db = getIntelDB();
         const pData = (db.p && db.p[playerName]) || { v: {} };
 
-        const rows = document.querySelectorAll('table tbody tr');
+        const rows = rootNode.querySelectorAll('table tbody tr');
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
             if (row.dataset.twTroopVilProcessed) continue;
@@ -712,7 +829,10 @@
                 const pSpan = document.createElement('div');
                 pSpan.className = 'tw-troop-vil-power text-xs mt-0.5 flex gap-2 font-medium cursor-pointer';
                 pSpan.title = 'Click for full troop statistics';
-                pSpan.onclick = () => openTroopBreakdownModal(playerName);
+                pSpan.onclick = (e) => {
+                    e.stopPropagation();
+                    openTroopBreakdownModal(playerName);
+                };
                 pSpan.innerHTML = createBadgeMarkup(hammer, def);
                 nameTd.appendChild(pSpan);
             }
@@ -780,7 +900,7 @@
                 </div>
                 <div class="tw-troop-panel-body flex flex-col gap-2 mt-1">
                     <div class="tw-troop-modal-trigger cursor-pointer" title="Click for full troop statistics">
-                        ${createBadgeMarkup(hammer, def, 'VIL HMR', 'VIL DEF')}
+                        ${createBadgeMarkup(hammer, def, 'HMR', 'DEF')}
                     </div>
                     <div class="text-xs text-paper-brown mb-1">Scanned: ${lastScanStr}</div>
                     <div class="flex flex-wrap gap-1">
@@ -797,7 +917,6 @@
             `;
         }
 
-        // Collapse Listener
         const toggleBtn = panel.querySelector('.tw-troop-toggle-btn');
         const bodyEl = panel.querySelector('.tw-troop-panel-body');
         const iconSvg = panel.querySelector('.tw-troop-chevron-icon');
@@ -817,7 +936,6 @@
             });
         }
 
-        // Modal Trigger Listener (Fixes Modal Not Opening Issue)
         const modalTrigger = panel.querySelector('.tw-troop-modal-trigger');
         if (modalTrigger && vilMatch) {
             modalTrigger.addEventListener('click', (e) => {
@@ -827,7 +945,6 @@
             });
         }
 
-        // Position: Insert immediately AFTER the Send Actions section
         const sendSection = rootNode.querySelector('section');
         if (sendSection && sendSection.parentElement) {
             sendSection.parentElement.insertBefore(panel, sendSection.nextElementSibling);
