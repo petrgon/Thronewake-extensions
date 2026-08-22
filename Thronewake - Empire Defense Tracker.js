@@ -3,6 +3,7 @@
 // @namespace    violentmonkey-thronewake-troops
 // @version      7.3
 // @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown.
+// @author       petrgon
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
