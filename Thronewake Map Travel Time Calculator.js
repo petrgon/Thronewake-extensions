@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Map Travel Time Calculator
 // @namespace    http://tampermonkey.net/
-// @version      5.3
-// @description  Calculates distance, travel durations, and UTC arrival times on Thronewake. Touch-resizable on mobile devices with non-intrusive target selection.
+// @version      5.4
+// @description  Calculates distance, travel durations, and UTC arrival times on Thronewake. Features clean bottom-right touch/mouse resizing and non-intrusive target picking.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -299,7 +299,7 @@
             max-height: 85vh; border-radius: 4px; color: #101010;
             font-family: var(--font-sans, sans-serif); font-size: 13px;
             box-shadow: inset 0 0 10px rgba(16,16,16,0.25), 0 6px 18px rgba(0,0,0,0.6);
-            display: none; flex-direction: column; overflow: auto; resize: both;
+            display: none; flex-direction: column; overflow: auto;
             user-select: none; touch-action: auto; box-sizing: border-box;
         `;
 
@@ -438,7 +438,7 @@
                 </table>
             </div>
 
-            <div id="tw-calc-touch-handle" style="position: absolute; bottom: 0; right: 0; width: 22px; height: 22px; cursor: se-resize; touch-action: none; display: flex; align-items: flex-end; justify-content: flex-end; padding: 2px;">
+            <div id="tw-calc-touch-handle" style="position: absolute; bottom: 0; right: 0; width: 24px; height: 24px; cursor: se-resize; touch-action: none; display: flex; align-items: flex-end; justify-content: flex-end; padding: 3px; user-select: none;">
                 <div style="width: 0; height: 0; border-style: solid; border-width: 0 0 12px 12px; border-color: transparent transparent #6a5a48 transparent;"></div>
             </div>
         `;
@@ -446,7 +446,7 @@
         document.body.appendChild(widget);
 
         makeDraggable(widget, document.getElementById('tw-calc-header'));
-        makeTouchResizable(widget, document.getElementById('tw-calc-touch-handle'));
+        makeResizable(widget, document.getElementById('tw-calc-touch-handle'));
 
         const modHeader = document.getElementById('tw-modifiers-header');
         const modContent = document.getElementById('tw-modifiers-content');
@@ -544,6 +544,15 @@
         }
     }
 
+    function lockTopLeftAnchor(element) {
+        const rect = element.getBoundingClientRect();
+        element.style.right = 'auto';
+        element.style.bottom = 'auto';
+        element.style.left = `${rect.left}px`;
+        element.style.top = `${rect.top}px`;
+        return rect;
+    }
+
     function makeDraggable(element, handle) {
         let isDragging = false;
         let startX, startY, initialLeft, initialTop;
@@ -551,20 +560,15 @@
         const startDrag = (e) => {
             if (['BUTTON', 'INPUT', 'SELECT'].includes(e.target.tagName)) return;
             isDragging = true;
+
+            const rect = lockTopLeftAnchor(element);
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
             startX = clientX;
             startY = clientY;
-
-            const rect = element.getBoundingClientRect();
             initialLeft = rect.left;
             initialTop = rect.top;
-
-            element.style.right = 'auto';
-            element.style.bottom = 'auto';
-            element.style.left = `${initialLeft}px`;
-            element.style.top = `${initialTop}px`;
         };
 
         const doDrag = (e) => {
@@ -587,25 +591,35 @@
         document.addEventListener('touchend', stopDrag);
     }
 
-    function makeTouchResizable(element, handle) {
+    function makeResizable(element, handle) {
         let startX, startY, startW, startH;
 
-        const onTouchStart = (e) => {
+        const startResize = (clientX, clientY) => {
+            const rect = lockTopLeftAnchor(element);
+            startX = clientX;
+            startY = clientY;
+            startW = rect.width;
+            startH = rect.height;
+        };
+
+        const doResize = (clientX, clientY) => {
+            const newW = Math.max(270, startW + (clientX - startX));
+            const newH = Math.max(200, startH + (clientY - startY));
+            element.style.width = `${newW}px`;
+            element.style.height = `${newH}px`;
+        };
+
+        // Touch handling
+        handle.addEventListener('touchstart', (e) => {
             e.preventDefault();
             e.stopPropagation();
             const touch = e.touches[0];
-            startX = touch.clientX;
-            startY = touch.clientY;
-            startW = parseInt(window.getComputedStyle(element).width, 10);
-            startH = parseInt(window.getComputedStyle(element).height, 10);
+            startResize(touch.clientX, touch.clientY);
 
             const onTouchMove = (ev) => {
                 if (!ev.touches || ev.touches.length === 0) return;
                 const t = ev.touches[0];
-                const newW = Math.max(260, startW + (t.clientX - startX));
-                const newH = Math.max(200, startH + (t.clientY - startY));
-                element.style.width = `${newW}px`;
-                element.style.height = `${newH}px`;
+                doResize(t.clientX, t.clientY);
             };
 
             const onTouchEnd = () => {
@@ -615,9 +629,26 @@
 
             document.addEventListener('touchmove', onTouchMove, { passive: false });
             document.addEventListener('touchend', onTouchEnd);
-        };
+        }, { passive: false });
 
-        handle.addEventListener('touchstart', onTouchStart, { passive: false });
+        // Mouse handling
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            startResize(e.clientX, e.clientY);
+
+            const onMouseMove = (ev) => {
+                doResize(ev.clientX, ev.clientY);
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
     }
 
     function setupHotkeys() {
@@ -732,7 +763,6 @@
                     const trgYVal = document.getElementById('tw-trg-y')?.value?.trim();
                     const hasTarget = trgXVal !== '' && trgYVal !== '' && trgXVal !== undefined && trgYVal !== undefined;
 
-                    // Strictly check if target values exist. Never auto-switch if ANY target value is present.
                     if (hasTarget) {
                         setPickingMode(null);
                     } else {
