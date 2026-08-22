@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      16.8
-// @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], zero-allocation tuple processing, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
+// @version      17.0
+// @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], persistent modal time range selection across player views, parenthesized badge stripping, negative value support, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -31,7 +31,6 @@
     const NINE_DAYS_S = 9 * 24 * 60 * 60;
     const NINETY_DAYS_S = 90 * 24 * 60 * 60;
 
-    // Key aliases for compact Gist storage
     const KEY_MAP = {
         'pop_population': 'pop',
         'pop_villages': 'vil',
@@ -54,6 +53,7 @@
     let syncTimeout = null;
     let activeChart = null;
     let observer = null;
+    let selectedChartDays = 3; // Remembers chart view state across player modals
 
     function syncSettingsFromGist(remoteSettings) {
         if (!remoteSettings || typeof remoteSettings !== 'object') return;
@@ -77,7 +77,6 @@
         GM_setValue(LOCAL_HISTORY_KEY, JSON.stringify(gistHistory));
     }
 
-    // Direct tuple normalizer: converts legacy objects {t, v} or ms-timestamps to second-precision tuples [t_sec, v]
     function getValidTuples(records) {
         if (!records || !Array.isArray(records)) return [];
         const result = [];
@@ -91,7 +90,6 @@
             } else continue;
 
             if (typeof v === 'number' && v < 1000000000) {
-                // Convert ms to seconds if legacy timestamp
                 if (t > 100000000000) t = Math.floor(t / 1000);
                 result.push([t, v]);
             }
@@ -109,7 +107,6 @@
                 if (!gistHistory[key]) gistHistory[key] = {};
 
                 for (const [metricKey, remoteRecords] of Object.entries(remoteVal)) {
-                    // Map legacy metric keys to short aliases
                     const storageKey = KEY_MAP[metricKey] || metricKey;
                     const localRecords = gistHistory[key][storageKey] || gistHistory[key][metricKey];
 
@@ -389,8 +386,8 @@
 
     function parseValue(text) {
         if (!text) return 0;
-        const clean = text.replace(/[\s\u00a0]+/g, '').replace(/\s*\([+\-\d.%\s\u25B2\u25BC\u25BA\u23F8]+\)$/, '').trim();
-        const match = clean.match(/([\d\.,]+)\s*([kMbB]?)/);
+        const clean = text.replace(/[\s\u00a0]+/g, '').replace(/\(.*?\)/g, '').trim();
+        const match = clean.match(/(-?[\d\.,]+)\s*([kMbB]?)/);
         if (!match) return 0;
 
         let num = parseFloat(match[1].replace(/,/g, ''));
@@ -479,7 +476,6 @@
         const metricsConfig = getMetricsConfig(table);
         let hasNewData = false;
 
-        // Delegated table click listener
         if (!table.dataset.twDelegated) {
             table.dataset.twDelegated = 'true';
             table.addEventListener('click', (e) => {
@@ -599,7 +595,7 @@
                         <h3 id="tw-trend-title" style="font-weight: 600; text-transform: uppercase; font-size: 15px; color: #6a5a48; margin: 0;">Trend Chart</h3>
                         <div style="display: flex; align-items: center; gap: 8px;">
                             <div id="tw-chart-range-btns" style="display: flex; gap: 4px;">
-                                <button type="button" data-days="3" style="background: #165eb9; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">3D</button>
+                                <button type="button" data-days="3" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">3D</button>
                                 <button type="button" data-days="7" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">7D</button>
                                 <button type="button" data-days="30" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">30D</button>
                                 <button type="button" data-days="90" style="background: #6a5a48; color: #fff; border: 1px solid #101010; padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 2px;">All</button>
@@ -704,16 +700,23 @@
             });
         }
 
+        // Maintain user's last selected chart range preference across modal opens
         const rangeBtns = document.querySelectorAll('#tw-chart-range-btns button');
         rangeBtns.forEach(btn => {
+            const btnDays = parseInt(btn.getAttribute('data-days'), 10);
+            btn.style.background = (btnDays === selectedChartDays) ? '#165eb9' : '#6a5a48';
+
             btn.onclick = () => {
-                rangeBtns.forEach(b => b.style.background = '#6a5a48');
-                btn.style.background = '#165eb9';
-                renderChartForDays(parseInt(btn.getAttribute('data-days'), 10));
+                selectedChartDays = btnDays;
+                rangeBtns.forEach(b => {
+                    const bDays = parseInt(b.getAttribute('data-days'), 10);
+                    b.style.background = (bDays === selectedChartDays) ? '#165eb9' : '#6a5a48';
+                });
+                renderChartForDays(selectedChartDays);
             };
         });
 
-        renderChartForDays(3);
+        renderChartForDays(selectedChartDays);
 
         const intel = getTravianStrategicIntel(playerName, currentValue, metricKey);
         const intelContainer = document.getElementById('tw-strat-intel');
