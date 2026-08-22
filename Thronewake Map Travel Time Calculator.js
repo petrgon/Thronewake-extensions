@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Map Travel Time Calculator
 // @namespace    http://tampermonkey.net/
-// @version      5.4
+// @version      6.0
 // @description  Calculates distance, travel durations, and UTC arrival times on Thronewake. Features clean bottom-right touch/mouse resizing and non-intrusive target picking.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
@@ -233,15 +233,20 @@
     function updateMarkerOnTile(markerId, tileEl, labelText, color) {
         let marker = document.getElementById(markerId);
 
+        if (!tileEl) {
+            if (marker) {
+              resetCellZIndex(marker.parentElement);
+              marker.remove();
+              marker = null;
+            }
+
+            return;
+        }
+
         if (marker && marker.parentElement && marker.parentElement !== tileEl) {
             resetCellZIndex(marker.parentElement);
             marker.remove();
             marker = null;
-        }
-
-        if (!tileEl) {
-            if (marker) marker.remove();
-            return;
         }
 
         const gridCell = tileEl.closest('[role="gridcell"]') || tileEl.parentElement;
@@ -461,8 +466,8 @@
         };
 
         document.getElementById('tw-calc-close-btn').onclick = toggleCalculator;
-        document.getElementById('tw-pick-src').onclick = () => setPickingMode('src');
-        document.getElementById('tw-pick-trg').onclick = () => setPickingMode('trg');
+        document.getElementById('tw-pick-src').onclick = () => pickingMode == 'src' ? setPickingMode(null) : setPickingMode('src');
+        document.getElementById('tw-pick-trg').onclick = () => pickingMode == 'trg' ? setPickingMode(null) : setPickingMode('trg');
 
         const factionBtns = document.querySelectorAll('#tw-faction-bar button');
         factionBtns.forEach(btn => {
@@ -699,30 +704,39 @@
     }
 
     function extractCoordsFromEvent(e) {
-        let el = e.target;
-        while (el && el !== document.body) {
-            const ariaLabel = el.getAttribute ? (el.getAttribute('aria-label') || '') : '';
+      const clickX = e.clientX;
+      const clickY = e.clientY;
 
-            let match = ariaLabel.match(/Map tile at\s*(-?\d+),\s*(-?\d+)/i);
-            if (match) return { x: parseInt(match[1], 10), y: parseInt(match[2], 10) };
+      // 1. Get all tile container divs on the map
+      const tileDivs = document.querySelectorAll('[class*="@container/tile"]');
 
-            const textToSearch = (el.getAttribute ? (el.getAttribute('title') || '') : '') + ' ' + ariaLabel + ' ' + (el.textContent || '');
-            match = textToSearch.match(/\((-?\d{1,3})\|(-?\d{1,3})\)/);
-            if (match) return { x: parseInt(match[1], 10), y: parseInt(match[2], 10) };
+      // 2. Find which tile div visually contains the click point
+      for (const tile of tileDivs) {
+        const rect = tile.getBoundingClientRect();
 
-            if (el.dataset && el.dataset.x !== undefined && el.dataset.y !== undefined) {
-                return { x: parseInt(el.dataset.x, 10), y: parseInt(el.dataset.y, 10) };
+        if (
+          clickX >= rect.left &&
+          clickX <= rect.right &&
+          clickY >= rect.top &&
+          clickY <= rect.bottom
+        ) {
+          // 3. Extract aria-label or text from the inner button
+          const button = tile.querySelector('button');
+          if (button) {
+            const ariaLabel = button.getAttribute('aria-label') || '';
+
+            // Match "Map tile at X, Y" or fallback text "(-X|-Y)"
+            const match = ariaLabel.match(/Map tile at\s*(-?\d+),\s*(-?\d+)/i) ||
+                          button.textContent.match(/\((-?\d+)\|(-?\d+)\)/);
+
+            if (match) {
+              return { x: parseInt(match[1], 10), y: parseInt(match[2], 10) };
             }
-
-            el = el.parentElement;
+          }
         }
+      }
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlX = urlParams.get('x');
-        const urlY = urlParams.get('y');
-        if (urlX !== null && urlY !== null) return { x: parseInt(urlX, 10), y: parseInt(urlY, 10) };
-
-        return null;
+      return null;
     }
 
     function setupMapClickListener() {
@@ -749,11 +763,14 @@
 
             if (dist > 6) return;
 
+            const coords = extractCoordsFromEvent(e);
+
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
 
-            const coords = extractCoordsFromEvent(e);
+
+            console.log(coords);
             if (coords) {
                 if (pickingMode === 'src') {
                     document.getElementById('tw-src-x').value = coords.x;
@@ -841,11 +858,29 @@
             tr.innerHTML = `
                 <td style="padding: 6px 8px; font-weight: 600;">${u.name} <span style="color:#6a5a48; font-weight:400;">(${u.speed} t/h)</span></td>
                 <td style="padding: 6px 8px; text-align: center; font-weight: 700; color: #15803d;">${formatSeconds(totalSeconds)}</td>
-                <td style="padding: 6px 8px; text-align: right; color: #334155; font-weight: 600;">${formatArrivalTimeUTC(totalSeconds)}</td>
+                <td class="travel-eta-cell" data-total-seconds="${totalSeconds}" style="padding: 6px 8px; text-align: right; color: #334155; font-weight: 600;"></td>
             `;
             tbody.appendChild(tr);
         });
 
+         // Ensure only one global timer runs across all elements
+        if (window.travelTimerInterval) {
+          clearInterval(window.travelTimerInterval);
+        }
+
+        window.travelTimerInterval = setInterval(() => {
+          const cells = document.querySelectorAll('.travel-eta-cell');
+          if (cells.length === 0) return;
+
+          const now = Date.now();
+
+          cells.forEach(cell => {
+            const totalSeconds = parseInt(cell.dataset.totalSeconds, 10);
+            if (!isNaN(totalSeconds)) {
+              cell.textContent = formatArrivalTimeUTC(totalSeconds);
+            }
+          });
+        }, 1000);
         renderMapMarkers();
     }
 
