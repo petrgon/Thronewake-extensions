@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Top-Left Persistent Notepad (Mobile Drag & Resize)
 // @namespace    violentmonkey-persistent-notes
-// @version      4.2
+// @version      4.6
 // @description  Per-village persistent notes synced with GitHub Gist. Features full mobile touch drag, touch resize handle, and settings modal.
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
@@ -14,6 +14,10 @@
   'use strict';
 
   if (document.getElementById("persistent-notes-widget")) return;
+
+  const ICON_GEAR = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
+  const ICON_CHEVRON_DOWN = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+  const ICON_CHEVRON_UP = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>`;
 
   GM_addStyle(`
     #persistent-notes-widget {
@@ -30,7 +34,7 @@
       border: 2px solid #101010;
       border-radius: 4px;
       box-shadow: inset 0 0 10px rgba(16, 16, 16, 0.3), 0 4px 14px rgba(0, 0, 0, 0.5);
-      display: flex;
+      display: none;
       flex-direction: column;
       font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       overflow: hidden;
@@ -69,13 +73,14 @@
     .pn-header-actions {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 2px;
     }
 
     #persistent-notes-status {
       font-size: 10px;
       opacity: 0.85;
       cursor: pointer;
+      margin-right: 4px;
       transition: opacity 0.15s ease;
     }
 
@@ -85,42 +90,34 @@
     }
 
     .pn-icon-btn {
-      background: none;
+      background: transparent;
       border: none;
       color: #dcd3c6;
       cursor: pointer;
-      font-size: 12px;
-      padding: 0 2px;
+      padding: 0;
+      width: 22px;
+      height: 22px;
       opacity: 0.8;
-      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 3px;
+      transition: background-color 0.15s ease, opacity 0.15s ease;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+
+    .pn-icon-btn svg {
+      display: block;
+      width: 14px;
+      height: 14px;
+      pointer-events: none;
+      margin-bottom: 1px;
     }
 
     .pn-icon-btn:hover {
       opacity: 1;
-    }
-
-    #persistent-notes-toggle {
-      background-color: #165eb9;
-      border: 1px solid #101010;
-      border-radius: 50%;
-      color: #dcd3c6;
-      cursor: pointer;
-      width: 18px;
-      height: 18px;
-      min-width: 18px;
-      min-height: 18px;
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      font-weight: bold;
-      line-height: 1;
-      padding: 0;
-    }
-
-    #persistent-notes-toggle:hover {
-      background-color: #124993;
+      background-color: rgba(255, 255, 255, 0.15);
     }
 
     #persistent-notes-textarea {
@@ -184,7 +181,6 @@
       margin-top: 4px;
     }
 
-    /* Mobile-friendly Resize Handle */
     #persistent-notes-resize-handle {
       position: absolute;
       bottom: 0;
@@ -235,6 +231,13 @@
   function getGistId() { return GM_getValue("pn_gist_id", ""); }
   function getApiKey() { return GM_getValue("pn_api_key", ""); }
 
+  function hasVillagePanel() {
+    return !!(
+      document.querySelector('select[aria-label="Switch village"]') ||
+      document.querySelector('div[role="combobox"][aria-label="Switch village"]')
+    );
+  }
+
   function getVillageInfo() {
     const select = document.querySelector('select[aria-label="Switch village"]');
     if (select && select.options.length > 0) {
@@ -283,12 +286,14 @@
   const settingsBtn = document.createElement("button");
   settingsBtn.id = "pn-settings-btn";
   settingsBtn.className = "pn-icon-btn";
-  settingsBtn.textContent = "⚙️";
+  settingsBtn.innerHTML = ICON_GEAR;
   settingsBtn.title = "Configure Gist Credentials";
 
   const toggleBtn = document.createElement("button");
   toggleBtn.id = "persistent-notes-toggle";
-  toggleBtn.textContent = "—";
+  toggleBtn.className = "pn-icon-btn";
+  toggleBtn.innerHTML = ICON_CHEVRON_DOWN;
+  toggleBtn.title = "Minimize / Expand Note";
 
   const rightGroup = document.createElement("div");
   rightGroup.className = "pn-header-actions";
@@ -338,7 +343,7 @@
   document.getElementById("pn-save-settings").addEventListener("click", () => {
     const newGist = document.getElementById("pn-input-gist").value.trim();
     const newKey = document.getElementById("pn-input-key").value.trim();
-    
+
     GM_setValue("pn_gist_id", newGist);
     GM_setValue("pn_api_key", newKey);
 
@@ -424,7 +429,7 @@
 
   if (GM_getValue("pn_minimized", false)) {
     container.classList.add("pn-minimized");
-    toggleBtn.textContent = "+";
+    toggleBtn.innerHTML = ICON_CHEVRON_UP;
   }
 
   textarea.addEventListener("input", () => {
@@ -434,7 +439,14 @@
     saveDebounceTimer = setTimeout(pushCloudNotes, 1000);
   });
 
+  // Check panel presence and village updates periodically
   setInterval(() => {
+    if (!hasVillagePanel()) {
+      container.style.display = "none";
+      return;
+    }
+
+    container.style.display = "flex";
     const activeVillage = getVillageInfo();
     if (activeVillage.id !== currentVillage.id) {
       loadVillageNotes(activeVillage);
@@ -444,13 +456,11 @@
   toggleBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     const minState = container.classList.toggle("pn-minimized");
-    toggleBtn.textContent = minState ? "+" : "—";
+    toggleBtn.innerHTML = minState ? ICON_CHEVRON_UP : ICON_CHEVRON_DOWN;
     GM_setValue("pn_minimized", minState);
   });
 
-  // =========================================================================
   // TOUCH & MOUSE DRAGGING LOGIC
-  // =========================================================================
   let isDragging = false, dragOffsetX = 0, dragOffsetY = 0;
 
   function startDrag(clientX, clientY) {
@@ -474,12 +484,12 @@
   }
 
   header.addEventListener("mousedown", (e) => {
-    if (e.target === toggleBtn || e.target === status || e.target === settingsBtn) return;
+    if (e.target.closest('.pn-icon-btn') || e.target === status) return;
     startDrag(e.clientX, e.clientY);
   });
 
   header.addEventListener("touchstart", (e) => {
-    if (e.target === toggleBtn || e.target === status || e.target === settingsBtn) return;
+    if (e.target.closest('.pn-icon-btn') || e.target === status) return;
     const touch = e.touches[0];
     startDrag(touch.clientX, touch.clientY);
   }, { passive: true });
@@ -495,9 +505,7 @@
   document.addEventListener("mouseup", stopDrag);
   document.addEventListener("touchend", stopDrag);
 
-  // =========================================================================
   // TOUCH & MOUSE RESIZING LOGIC
-  // =========================================================================
   let isResizing = false, resizeStartW = 0, resizeStartH = 0, resizeStartX = 0, resizeStartY = 0;
 
   function startResize(clientX, clientY) {
