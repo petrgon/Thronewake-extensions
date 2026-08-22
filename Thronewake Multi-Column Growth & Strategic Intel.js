@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      16.5
-// @description  Tracks leaderboard columns individually, displays inline server-speed scaled growth percentages with momentum-based dynamic theme color coding, compact array tuple storage [timestamp, value], debounced Gist sync, robust two-point flatline boundary sampling, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history (with settings sync & connection indicator), live plot data injection at Date.now(), dynamic metric projections, clean text tooltips, and Travian strategy modal.
+// @version      16.7
+// @description  Tracks leaderboard columns individually, displays inline server-speed scaled growth percentages with momentum-based dynamic theme color coding, compact array tuple storage [timestamp, value], debounced Gist sync, robust two-point flatline boundary sampling, disconnect-guarded MutationObserver (0% CPU loop), race-condition-safe async Gist data merging with full tuple normalization, header-deduplicated table parsing, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history (with settings sync & connection indicator), live plot data injection at Date.now(), dynamic metric projections, clean text tooltips, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -43,6 +43,7 @@
     let gistStatus = 'not_configured'; // 'connected', 'error', 'not_configured'
     let syncTimeout = null;
     let activeChart = null;
+    let observer = null;
 
     // --- Settings Sync Helpers (__config__ Namespace) ---
 
@@ -76,6 +77,38 @@
             if (r && typeof r === 'object') return { t: r.t, v: r.v };
             return null;
         }).filter(r => r && typeof r.v === 'number' && r.v < 1000000000);
+    }
+
+    // Safe Merge: Normalizes legacy records into compact [t, v] tuples and prevents startup race condition overwrites
+    function mergeGistHistory(remoteData) {
+        if (!remoteData || typeof remoteData !== 'object') return;
+
+        for (const [key, remoteVal] of Object.entries(remoteData)) {
+            if (key === '__config__') continue;
+
+            if (typeof remoteVal === 'object' && remoteVal !== null) {
+                if (!gistHistory[key]) gistHistory[key] = {};
+
+                for (const [metricKey, remoteRecords] of Object.entries(remoteVal)) {
+                    const localRecords = gistHistory[key][metricKey];
+
+                    if (!localRecords) {
+                        const validRemote = getValidHistory(remoteRecords);
+                        gistHistory[key][metricKey] = validRemote.map(r => [r.t, r.v]);
+                    } else if (Array.isArray(remoteRecords) && Array.isArray(localRecords)) {
+                        const combinedMap = new Map();
+                        getValidHistory(remoteRecords).forEach(r => combinedMap.set(r.t, r.v));
+                        getValidHistory(localRecords).forEach(r => combinedMap.set(r.t, r.v));
+
+                        const mergedList = Array.from(combinedMap.entries())
+                            .map(([t, v]) => ({ t, v }))
+                            .sort((a, b) => a.t - b.t);
+
+                        gistHistory[key][metricKey] = mergedList.map(r => [r.t, r.v]);
+                    }
+                }
+            }
+        }
     }
 
     function formatRealDuration(hours) {
@@ -137,7 +170,7 @@
             isGistLoaded = true;
             gistStatus = 'not_configured';
             if (callback) callback(false, 'Enter Gist ID & Token first');
-            processTable();
+            runDOMPass();
             return;
         }
 
@@ -162,64 +195,64 @@
                                     url: fileObj.raw_url,
                                     onload: function (rawRes) {
                                         if (rawRes.status === 200) {
-                                            gistHistory = JSON.parse(rawRes.responseText);
-                                            if (gistHistory.__config__) syncSettingsFromGist(gistHistory.__config__);
-                                            else embedSettingsInGistHistory();
+                                            const remoteGist = JSON.parse(rawRes.responseText);
+                                            if (remoteGist.__config__) syncSettingsFromGist(remoteGist.__config__);
+                                            mergeGistHistory(remoteGist);
                                             saveLocalHistory();
                                             isGistLoaded = true;
                                             gistStatus = 'connected';
                                             if (callback) callback(true);
-                                            processTable();
+                                            runDOMPass();
                                         } else {
                                             isGistLoaded = true;
                                             gistStatus = 'error';
                                             if (callback) callback(false, 'Raw Stream Failed');
-                                            processTable();
+                                            runDOMPass();
                                         }
                                     }
                                 });
                                 return;
                             }
 
-                            gistHistory = JSON.parse(fileObj.content);
-                            if (gistHistory.__config__) syncSettingsFromGist(gistHistory.__config__);
-                            else embedSettingsInGistHistory();
+                            const remoteGist = JSON.parse(fileObj.content);
+                            if (remoteGist.__config__) syncSettingsFromGist(remoteGist.__config__);
+                            mergeGistHistory(remoteGist);
                             saveLocalHistory();
                             isGistLoaded = true;
                             gistStatus = 'connected';
                             if (callback) callback(true);
-                            processTable();
+                            runDOMPass();
                         } else {
                             isGistLoaded = true;
                             gistStatus = 'connected';
                             if (callback) callback(true);
-                            processTable();
+                            runDOMPass();
                         }
                     } catch (e) {
                         console.error('Error parsing Gist JSON', e);
                         isGistLoaded = true;
                         gistStatus = 'error';
                         if (callback) callback(false, 'Invalid JSON in Gist');
-                        processTable();
+                        runDOMPass();
                     }
                 } else {
                     isGistLoaded = true;
                     gistStatus = 'error';
                     if (callback) callback(false, `HTTP Error ${response.status}`);
-                    processTable();
+                    runDOMPass();
                 }
             },
             onerror: function () {
                 isGistLoaded = true;
                 gistStatus = 'error';
                 if (callback) callback(false, 'Network Error / Blocked');
-                processTable();
+                runDOMPass();
             },
             ontimeout: function () {
                 isGistLoaded = true;
                 gistStatus = 'error';
                 if (callback) callback(false, 'Request Timed Out');
-                processTable();
+                runDOMPass();
             }
         });
     }
@@ -490,35 +523,48 @@
 
     function getMetricsConfig(table) {
         const category = getActiveCategory();
-        const headerThs = Array.from(table.querySelectorAll('thead th, th, [role="columnheader"]'));
+        // Target the last header row if headers are stacked
+        const headerTr = table.querySelector('thead tr:last-child') || table.querySelector('tr');
+        const headerThs = headerTr ? Array.from(headerTr.querySelectorAll('th, [role="columnheader"]')) : [];
         const config = [];
+
+        const addConfig = (colIndex, key, label) => {
+            if (!config.some(c => c.colIndex === colIndex)) {
+                config.push({ colIndex, key, label });
+            }
+        };
 
         headerThs.forEach((th, idx) => {
             const text = th.textContent.trim().toLowerCase();
+            const colIndex = idx + 1;
+
             if (text.includes('village') || text.includes('town')) {
-                config.push({ colIndex: idx + 1, key: 'pop_villages', label: 'Villages' });
+                addConfig(colIndex, 'pop_villages', 'Villages');
             } else if (text.includes('population') || text.includes('pop') || text.includes('score') || text.includes('points')) {
                 if (!text.includes('pvp') && !text.includes('pve') && !text.includes('attack') && !text.includes('defense') && !text.includes('loot')) {
-                    config.push({ colIndex: idx + 1, key: 'pop_population', label: 'Population' });
+                    addConfig(colIndex, 'pop_population', 'Population');
                 }
             } else if (text.includes('pvp')) {
-                config.push({ colIndex: idx + 1, key: category === 'defense' ? 'defense_pvp' : 'attack_pvp', label: 'PvP Points' });
+                addConfig(colIndex, category === 'defense' ? 'defense_pvp' : 'attack_pvp', 'PvP Points');
             } else if (text.includes('pve')) {
-                config.push({ colIndex: idx + 1, key: category === 'defense' ? 'defense_pve' : 'attack_pve', label: 'PvE Points' });
+                addConfig(colIndex, category === 'defense' ? 'defense_pve' : 'attack_pve', 'PvE Points');
             } else if (text.includes('loot')) {
-                config.push({ colIndex: idx + 1, key: 'loot', label: 'Loot' });
+                addConfig(colIndex, 'loot', 'Loot');
             }
         });
 
         if (config.length === 0) {
             if (category === 'population') {
-                config.push({ colIndex: 3, key: 'pop_villages', label: 'Villages' }, { colIndex: 4, key: 'pop_population', label: 'Population' });
+                addConfig(3, 'pop_villages', 'Villages');
+                addConfig(4, 'pop_population', 'Population');
             } else if (category === 'attack') {
-                config.push({ colIndex: 3, key: 'attack_pvp', label: 'PvP Attack' }, { colIndex: 4, key: 'attack_pve', label: 'PvE Attack' });
+                addConfig(3, 'attack_pvp', 'PvP Attack');
+                addConfig(4, 'attack_pve', 'PvE Attack');
             } else if (category === 'defense') {
-                config.push({ colIndex: 3, key: 'defense_pvp', label: 'PvP Defense' }, { colIndex: 4, key: 'defense_pve', label: 'PvE Defense' });
+                addConfig(3, 'defense_pvp', 'PvP Defense');
+                addConfig(4, 'defense_pve', 'PvE Defense');
             } else if (category === 'loot') {
-                config.push({ colIndex: 3, key: 'loot', label: 'Loot' });
+                addConfig(3, 'loot', 'Loot');
             }
         }
 
@@ -601,21 +647,18 @@
 
                 if (!isAlliancePage) {
                     if (!lastRec) {
-                        // 1. Initial record
                         catHistory.push({ t: now, v: currentValue });
                         hasNewData = true;
                     } else if (currentValue !== lastRec.v) {
-                        // 2. Value changed: ALWAYS append new record to keep historical progression/baseline intact
                         catHistory.push({ t: now, v: currentValue });
                         hasNewData = true;
                     } else {
-                        // 3. Value unchanged: Only update or add boundary end-marker outside interval
                         if ((now - lastRec.t) >= minRecordMs) {
                             const len = catHistory.length;
                             if (len >= 2 && catHistory[len - 2].v === currentValue) {
-                                catHistory[len - 1].t = now; // Slide existing boundary marker
+                                catHistory[len - 1].t = now;
                             } else {
-                                catHistory.push({ t: now, v: currentValue }); // Establish second boundary marker
+                                catHistory.push({ t: now, v: currentValue });
                             }
                             hasNewData = true;
                         }
@@ -624,7 +667,6 @@
                     catHistory = catHistory.filter(r => (now - r.t) <= NINETY_DAYS_MS);
                     catHistory.sort((a, b) => a.t - b.t);
 
-                    // Save in compact array tuple format [t, v]
                     gistHistory[playerName][m.key] = catHistory.map(r => [r.t, r.v]);
                 } else {
                     gistHistory[playerName][m.key] = catHistory.map(r => [r.t, r.v]);
@@ -668,6 +710,13 @@
         if (hasNewData && isGistLoaded && !isAlliancePage) {
             pushToGistDebounced();
         }
+    }
+
+    function runDOMPass() {
+        if (observer) observer.disconnect();
+        injectConfigButton();
+        processTable();
+        if (observer) observer.observe(document.body, { childList: true, subtree: true });
     }
 
     function openTrendModal(playerName, metricKey, metricLabel, currentValue) {
@@ -1070,7 +1119,7 @@
                         connBadge.textContent = '🟢 Connected';
                         connBadge.style.cssText = 'font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px; color: #15803d; background: #dcfce7; border: 1px solid #86efac;';
                     }
-                    processTable();
+                    runDOMPass();
                     setTimeout(() => { modal.style.display = 'none'; }, 1000);
                 } else {
                     statusEl.textContent = `Sync failed (${err || 'check credentials'})`;
@@ -1086,17 +1135,15 @@
     pullFromGist();
 
     let timeout = null;
-    const observer = new MutationObserver(() => {
+    observer = new MutationObserver(() => {
         if (timeout) clearTimeout(timeout);
         timeout = setTimeout(() => {
-            injectConfigButton();
-            processTable();
+            runDOMPass();
         }, 150);
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
     setTimeout(() => {
-        injectConfigButton();
-        processTable();
+        runDOMPass();
     }, 300);
 })();
