@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      17.0
+// @version      17.1
 // @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], persistent modal time range selection across player views, parenthesized badge stripping, negative value support, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
@@ -53,7 +53,7 @@
     let syncTimeout = null;
     let activeChart = null;
     let observer = null;
-    let selectedChartDays = 3; // Remembers chart view state across player modals
+    let selectedChartDays = 3;
 
     function syncSettingsFromGist(remoteSettings) {
         if (!remoteSettings || typeof remoteSettings !== 'object') return;
@@ -453,6 +453,34 @@
         }
 
         return config;
+    }
+
+    function canInjectPercentages() {
+        const table = findLeaderboardTable();
+        if (!table) return false;
+
+        const rows = table.querySelectorAll('tbody tr, [role="row"]');
+        if (rows.length === 0) return false;
+
+        const metricsConfig = getMetricsConfig(table);
+        if (metricsConfig.length === 0) return false;
+
+        let validCellFound = false;
+        for (const row of rows) {
+            const tds = Array.from(row.querySelectorAll('td, [role="gridcell"]'));
+            const playerLink = row.querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="alliance"], a[href*="/p/"]') || tds[1]?.querySelector('a');
+            if (playerLink) {
+                for (const m of metricsConfig) {
+                    if (tds[m.colIndex - 1]) {
+                        validCellFound = true;
+                        break;
+                    }
+                }
+            }
+            if (validCellFound) break;
+        }
+
+        return validCellFound;
     }
 
     function processTable() {
