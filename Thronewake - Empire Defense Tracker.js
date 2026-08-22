@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake - Empire Defense Tracker
 // @namespace    violentmonkey-thronewake-troops
-// @version      8.6
+// @version      8.7
 // @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown.
 // @author       petrgon
 // @match        *://*.thronewake.com/*
@@ -151,6 +151,10 @@
 
   let resetCopyTimeout = null;
 
+  function formatNum(num) {
+    return num.toLocaleString('en-US');
+  }
+
   function getTroopMatch(text) {
     const lower = text.toLowerCase().trim();
     for (const u of SCOUT_UNITS) { if (lower.includes(u)) return { category: "scout", unit: u }; }
@@ -247,21 +251,21 @@
         const cleanName = v.name.replace(/\s*\(-?\d+\|-?\d+\)/, '');
 
         let parts = [];
-        if (defInf > 0) parts.push(`Inf: ${defInf.toLocaleString()}`);
-        if (defCav > 0) parts.push(`Cav: ${defCav.toLocaleString()}`);
-        if (scout > 0) parts.push(`Scout: ${scout.toLocaleString()}`);
+        if (defInf > 0) parts.push(`Inf: ${formatNum(defInf)}`);
+        if (defCav > 0) parts.push(`Cav: ${formatNum(defCav)}`);
+        if (scout > 0) parts.push(`Scout: ${formatNum(scout)}`);
 
         let detailsStr = parts.length > 0 ? ` (${parts.join(' | ')})` : '';
-        villageList.push({ name: cleanName, text: `• ${cleanName}: ${vTotal.toLocaleString()} def${detailsStr}` });
+        villageList.push({ name: cleanName, text: `• ${cleanName}: ${formatNum(vTotal)} def${detailsStr}` });
       }
     });
 
     villageList.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
     let catSummaryParts = [];
-    if (cats.def_inf > 0) catSummaryParts.push(`🛡️ Def Inf: ${cats.def_inf.toLocaleString()}`);
-    if (cats.def_cav > 0) catSummaryParts.push(`🐴 Def Cav: ${cats.def_cav.toLocaleString()}`);
-    if (cats.scout > 0) catSummaryParts.push(`👁️ Scouts: ${cats.scout.toLocaleString()}`);
+    if (cats.def_inf > 0) catSummaryParts.push(`🛡️ Def Inf: ${formatNum(cats.def_inf)}`);
+    if (cats.def_cav > 0) catSummaryParts.push(`🐴 Def Cav: ${formatNum(cats.def_cav)}`);
+    if (cats.scout > 0) catSummaryParts.push(`👁️ Scouts: ${formatNum(cats.scout)}`);
 
     let summaryText = "";
     let copiedMsg = fullData ? "FULL COPIED!" : "COPIED!";
@@ -269,7 +273,7 @@
     if (fullData) {
       summaryText = [
         `🛡️ Empire Defense Summary (${recordedIds.length}/${info.totalVillages || recordedIds.length} Villages)`,
-        `Total Defense: ${total.toLocaleString()}`,
+        `Total Defense: ${formatNum(total)}`,
         catSummaryParts.length > 0 ? catSummaryParts.join(' | ') : 'No Defense Troops',
         `\nVillage Breakdown:`,
         ...villageList.map(v => v.text)
@@ -386,12 +390,12 @@
 
         const cleanName = vData.name.replace(/\s*\(-?\d+\|-?\d+\)/, '');
         let parts = [];
-        if (defInf > 0) parts.push(`Inf: ${defInf.toLocaleString()}`);
-        if (defCav > 0) parts.push(`Cav: ${defCav.toLocaleString()}`);
-        if (scout > 0) parts.push(`Scout: ${scout.toLocaleString()}`);
+        if (defInf > 0) parts.push(`Inf: ${formatNum(defInf)}`);
+        if (defCav > 0) parts.push(`Cav: ${formatNum(defCav)}`);
+        if (scout > 0) parts.push(`Scout: ${formatNum(scout)}`);
 
         let detailsStr = parts.length > 0 ? ` (${parts.join(' | ')})` : '';
-        totals.villageList.push({ name: cleanName, text: `${cleanName}: ${vTotal.toLocaleString()} def${detailsStr}` });
+        totals.villageList.push({ name: cleanName, text: `${cleanName}: ${formatNum(vTotal)} def${detailsStr}` });
       }
     });
 
@@ -402,11 +406,11 @@
     totals.villageList.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
     const empireEl = document.getElementById("tw-val-empire");
-    if (empireEl) empireEl.textContent = totals.grandTotal.toLocaleString();
+    if (empireEl) empireEl.textContent = formatNum(totals.grandTotal);
 
     ["def_inf", "def_cav", "scout"].forEach(cat => {
       const valEl = document.getElementById(`tw-val-${cat}`);
-      if (valEl) valEl.textContent = totals.categories[cat].toLocaleString();
+      if (valEl) valEl.textContent = formatNum(totals.categories[cat]);
     });
 
     const card = document.getElementById("tw-empire-troop-card");
