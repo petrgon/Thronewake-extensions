@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      17.3
+// @version      17.4
 // @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], persistent modal time range selection across player views, parenthesized badge stripping, negative value support, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
