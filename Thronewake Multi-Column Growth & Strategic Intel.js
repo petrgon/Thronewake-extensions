@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      16.7
-// @description  Tracks leaderboard columns individually, displays inline server-speed scaled growth percentages with momentum-based dynamic theme color coding, compact array tuple storage [timestamp, value], debounced Gist sync, robust two-point flatline boundary sampling, disconnect-guarded MutationObserver (0% CPU loop), race-condition-safe async Gist data merging with full tuple normalization, header-deduplicated table parsing, configurable number formatting, UTC/Local time toggle, server speed multiplier, customizable record interval, 90-day UTC Gist history (with settings sync & connection indicator), live plot data injection at Date.now(), dynamic metric projections, clean text tooltips, and Travian strategy modal.
+// @version      16.8
+// @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], zero-allocation tuple processing, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -25,27 +25,35 @@
     const LOCAL_HISTORY_KEY = 'tw_local_history';
     const GIST_FILENAME = 'thronewake_leaderboard_history.json';
 
-    const ONE_HOUR_MS = 60 * 60 * 1000;
-    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
-    const NINE_DAYS_MS = 9 * 24 * 60 * 60 * 1000;
-    const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+    const ONE_HOUR_S = 60 * 60;
+    const ONE_DAY_S = 24 * 60 * 60;
+    const THREE_DAYS_S = 3 * 24 * 60 * 60;
+    const NINE_DAYS_S = 9 * 24 * 60 * 60;
+    const NINETY_DAYS_S = 90 * 24 * 60 * 60;
+
+    // Key aliases for compact Gist storage
+    const KEY_MAP = {
+        'pop_population': 'pop',
+        'pop_villages': 'vil',
+        'attack_pvp': 'att_pvp',
+        'attack_pve': 'att_pve',
+        'defense_pvp': 'def_pvp',
+        'defense_pve': 'def_pve',
+        'loot': 'loot'
+    };
 
     let gistHistory = {};
     try {
-        const rawLocal = GM_getValue(LOCAL_HISTORY_KEY, '{}');
-        gistHistory = JSON.parse(rawLocal) || {};
+        gistHistory = JSON.parse(GM_getValue(LOCAL_HISTORY_KEY, '{}')) || {};
     } catch (e) {
         gistHistory = {};
     }
 
     let isGistLoaded = false;
-    let gistStatus = 'not_configured'; // 'connected', 'error', 'not_configured'
+    let gistStatus = 'not_configured';
     let syncTimeout = null;
     let activeChart = null;
     let observer = null;
-
-    // --- Settings Sync Helpers (__config__ Namespace) ---
 
     function syncSettingsFromGist(remoteSettings) {
         if (!remoteSettings || typeof remoteSettings !== 'object') return;
@@ -69,17 +77,28 @@
         GM_setValue(LOCAL_HISTORY_KEY, JSON.stringify(gistHistory));
     }
 
-    // Normalizes legacy object records {t, v} or compact tuples [t, v] into unified {t, v}
-    function getValidHistory(records) {
+    // Direct tuple normalizer: converts legacy objects {t, v} or ms-timestamps to second-precision tuples [t_sec, v]
+    function getValidTuples(records) {
         if (!records || !Array.isArray(records)) return [];
-        return records.map(r => {
-            if (Array.isArray(r)) return { t: r[0], v: r[1] };
-            if (r && typeof r === 'object') return { t: r.t, v: r.v };
-            return null;
-        }).filter(r => r && typeof r.v === 'number' && r.v < 1000000000);
+        const result = [];
+        for (let i = 0; i < records.length; i++) {
+            const r = records[i];
+            let t = 0, v = 0;
+            if (Array.isArray(r)) {
+                t = r[0]; v = r[1];
+            } else if (r && typeof r === 'object') {
+                t = r.t; v = r.v;
+            } else continue;
+
+            if (typeof v === 'number' && v < 1000000000) {
+                // Convert ms to seconds if legacy timestamp
+                if (t > 100000000000) t = Math.floor(t / 1000);
+                result.push([t, v]);
+            }
+        }
+        return result;
     }
 
-    // Safe Merge: Normalizes legacy records into compact [t, v] tuples and prevents startup race condition overwrites
     function mergeGistHistory(remoteData) {
         if (!remoteData || typeof remoteData !== 'object') return;
 
@@ -90,21 +109,25 @@
                 if (!gistHistory[key]) gistHistory[key] = {};
 
                 for (const [metricKey, remoteRecords] of Object.entries(remoteVal)) {
-                    const localRecords = gistHistory[key][metricKey];
+                    // Map legacy metric keys to short aliases
+                    const storageKey = KEY_MAP[metricKey] || metricKey;
+                    const localRecords = gistHistory[key][storageKey] || gistHistory[key][metricKey];
 
+                    const validRemote = getValidTuples(remoteRecords);
                     if (!localRecords) {
-                        const validRemote = getValidHistory(remoteRecords);
-                        gistHistory[key][metricKey] = validRemote.map(r => [r.t, r.v]);
-                    } else if (Array.isArray(remoteRecords) && Array.isArray(localRecords)) {
+                        gistHistory[key][storageKey] = validRemote;
+                    } else {
+                        const validLocal = getValidTuples(localRecords);
                         const combinedMap = new Map();
-                        getValidHistory(remoteRecords).forEach(r => combinedMap.set(r.t, r.v));
-                        getValidHistory(localRecords).forEach(r => combinedMap.set(r.t, r.v));
+                        validRemote.forEach(r => combinedMap.set(r[0], r[1]));
+                        validLocal.forEach(r => combinedMap.set(r[0], r[1]));
 
-                        const mergedList = Array.from(combinedMap.entries())
-                            .map(([t, v]) => ({ t, v }))
-                            .sort((a, b) => a.t - b.t);
+                        const merged = Array.from(combinedMap.entries()).sort((a, b) => a[0] - b[0]);
+                        gistHistory[key][storageKey] = merged;
+                    }
 
-                        gistHistory[key][metricKey] = mergedList.map(r => [r.t, r.v]);
+                    if (storageKey !== metricKey && gistHistory[key][metricKey]) {
+                        delete gistHistory[key][metricKey];
                     }
                 }
             }
@@ -112,10 +135,7 @@
     }
 
     function formatRealDuration(hours) {
-        if (hours >= 24) {
-            const days = hours / 24;
-            return `${days.toFixed(1).replace(/\.0$/, '')}d`;
-        }
+        if (hours >= 24) return `${(hours / 24).toFixed(1).replace(/\.0$/, '')}d`;
         return `${hours.toFixed(1).replace(/\.0$/, '')}h`;
     }
 
@@ -128,10 +148,7 @@
             const isGistOpen = gistModal && gistModal.style.display !== 'none';
 
             if (isTrendOpen || isGistOpen) {
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-
+                e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
                 if (isTrendOpen) trendModal.style.display = 'none';
                 if (isGistOpen) gistModal.style.display = 'none';
             }
@@ -146,20 +163,12 @@
         const sign = rounded < 0 ? '-' : (includeSign && rounded > 0 ? '+' : '');
 
         if (formatMode === 'compact') {
-            let formatted = '';
-            if (absNum >= 1e9) {
-                formatted = (absNum / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
-            } else if (absNum >= 1e6) {
-                formatted = (absNum / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-            } else if (absNum >= 1e3) {
-                formatted = (absNum / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
-            } else {
-                formatted = absNum.toString();
-            }
-            return sign + formatted;
-        } else {
-            return sign + absNum.toLocaleString('en-US');
+            if (absNum >= 1e9) return sign + (absNum / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+            if (absNum >= 1e6) return sign + (absNum / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+            if (absNum >= 1e3) return sign + (absNum / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+            return sign + absNum;
         }
+        return sign + absNum.toLocaleString('en-US');
     }
 
     function pullFromGist(callback) {
@@ -167,20 +176,15 @@
         const token = GM_getValue(GIST_TOKEN_KEY, '');
 
         if (!gistId || !token) {
-            isGistLoaded = true;
-            gistStatus = 'not_configured';
+            isGistLoaded = true; gistStatus = 'not_configured';
             if (callback) callback(false, 'Enter Gist ID & Token first');
-            runDOMPass();
-            return;
+            runDOMPass(); return;
         }
 
         GM_xmlhttpRequest({
             method: 'GET',
             url: `https://api.github.com/gists/${gistId}`,
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Accept': 'application/vnd.github.v3+json'
-            },
+            headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github.v3+json' },
             timeout: 10000,
             onload: function (response) {
                 if (response.status === 200) {
@@ -188,72 +192,39 @@
                         const resData = JSON.parse(response.responseText);
                         if (resData.files && resData.files[GIST_FILENAME]) {
                             const fileObj = resData.files[GIST_FILENAME];
+                            const handleJSON = (jsonStr) => {
+                                const remoteGist = JSON.parse(jsonStr);
+                                if (remoteGist.__config__) syncSettingsFromGist(remoteGist.__config__);
+                                mergeGistHistory(remoteGist);
+                                saveLocalHistory();
+                                isGistLoaded = true; gistStatus = 'connected';
+                                if (callback) callback(true);
+                                runDOMPass();
+                            };
 
                             if (fileObj.truncated && fileObj.raw_url) {
                                 GM_xmlhttpRequest({
-                                    method: 'GET',
-                                    url: fileObj.raw_url,
-                                    onload: function (rawRes) {
-                                        if (rawRes.status === 200) {
-                                            const remoteGist = JSON.parse(rawRes.responseText);
-                                            if (remoteGist.__config__) syncSettingsFromGist(remoteGist.__config__);
-                                            mergeGistHistory(remoteGist);
-                                            saveLocalHistory();
-                                            isGistLoaded = true;
-                                            gistStatus = 'connected';
-                                            if (callback) callback(true);
-                                            runDOMPass();
-                                        } else {
-                                            isGistLoaded = true;
-                                            gistStatus = 'error';
-                                            if (callback) callback(false, 'Raw Stream Failed');
-                                            runDOMPass();
-                                        }
+                                    method: 'GET', url: fileObj.raw_url,
+                                    onload: (rawRes) => {
+                                        if (rawRes.status === 200) handleJSON(rawRes.responseText);
+                                        else { isGistLoaded = true; gistStatus = 'error'; runDOMPass(); }
                                     }
                                 });
                                 return;
                             }
-
-                            const remoteGist = JSON.parse(fileObj.content);
-                            if (remoteGist.__config__) syncSettingsFromGist(remoteGist.__config__);
-                            mergeGistHistory(remoteGist);
-                            saveLocalHistory();
-                            isGistLoaded = true;
-                            gistStatus = 'connected';
-                            if (callback) callback(true);
-                            runDOMPass();
+                            handleJSON(fileObj.content);
                         } else {
-                            isGistLoaded = true;
-                            gistStatus = 'connected';
-                            if (callback) callback(true);
-                            runDOMPass();
+                            isGistLoaded = true; gistStatus = 'connected';
+                            if (callback) callback(true); runDOMPass();
                         }
                     } catch (e) {
-                        console.error('Error parsing Gist JSON', e);
-                        isGistLoaded = true;
-                        gistStatus = 'error';
-                        if (callback) callback(false, 'Invalid JSON in Gist');
-                        runDOMPass();
+                        isGistLoaded = true; gistStatus = 'error'; runDOMPass();
                     }
                 } else {
-                    isGistLoaded = true;
-                    gistStatus = 'error';
-                    if (callback) callback(false, `HTTP Error ${response.status}`);
-                    runDOMPass();
+                    isGistLoaded = true; gistStatus = 'error'; runDOMPass();
                 }
             },
-            onerror: function () {
-                isGistLoaded = true;
-                gistStatus = 'error';
-                if (callback) callback(false, 'Network Error / Blocked');
-                runDOMPass();
-            },
-            ontimeout: function () {
-                isGistLoaded = true;
-                gistStatus = 'error';
-                if (callback) callback(false, 'Request Timed Out');
-                runDOMPass();
-            }
+            onerror: () => { isGistLoaded = true; gistStatus = 'error'; runDOMPass(); }
         });
     }
 
@@ -276,94 +247,66 @@
                     'Content-Type': 'application/json'
                 },
                 data: JSON.stringify({
-                    files: {
-                        [GIST_FILENAME]: {
-                            content: JSON.stringify(gistHistory) // Compact unindented JSON stringification
-                        }
-                    }
+                    files: { [GIST_FILENAME]: { content: JSON.stringify(gistHistory) } }
                 }),
-                onload: function(res) {
-                    if (res.status === 200) gistStatus = 'connected';
-                    else gistStatus = 'error';
-                },
-                onerror: function() { gistStatus = 'error'; }
+                onload: (res) => { gistStatus = res.status === 200 ? 'connected' : 'error'; },
+                onerror: () => { gistStatus = 'error'; }
             });
         }, 1200);
     }
 
-    function getGainOverHours(records, hours) {
-        const valid = getValidHistory(records);
-        if (valid.length < 2) return 0;
+    function getGainOverHours(tuples, hours) {
+        if (!tuples || tuples.length < 2) return 0;
+        const targetTimeSec = Math.floor(Date.now() / 1000) - (hours * 3600);
 
-        const targetTime = Date.now() - (hours * 60 * 60 * 1000);
-        let rec = valid[0];
-        let minDiff = Math.abs(rec.t - targetTime);
-        for (let i = 1; i < valid.length; i++) {
-            let diff = Math.abs(valid[i].t - targetTime);
-            if (diff < minDiff) { minDiff = diff; rec = valid[i]; }
+        let rec = tuples[0];
+        let minDiff = Math.abs(rec[0] - targetTimeSec);
+        for (let i = 1; i < tuples.length; i++) {
+            const diff = Math.abs(tuples[i][0] - targetTimeSec);
+            if (diff < minDiff) { minDiff = diff; rec = tuples[i]; }
         }
-        return Math.max(0, valid[valid.length - 1].v - rec.v);
+        return Math.max(0, tuples[tuples.length - 1][1] - rec[1]);
     }
 
-    // --- Server Speed Scaled Growth Stats ---
-
-    function getSpeedScaledGrowthStats(validRecords, currentValue) {
-        const valid = getValidHistory(validRecords);
+    function getSpeedScaledGrowthStats(validTuples, currentValue) {
         const serverSpeed = parseFloat(GM_getValue(SERVER_SPEED_KEY, 3)) || 3;
+        const str1 = formatRealDuration(72 / serverSpeed);
+        const str3 = formatRealDuration(216 / serverSpeed);
 
-        const real1Hours = 72 / serverSpeed;
-        const real3Hours = 216 / serverSpeed;
-        const str1 = formatRealDuration(real1Hours);
-        const str3 = formatRealDuration(real3Hours);
-
-        if (valid.length < 2) {
+        if (!validTuples || validTuples.length < 2) {
             return { percentText: '0.00%', pct3dText: '0.00%', gain1Day: 0, gain3Days: 0, str1, str3, symbol: '', status: '▶ Gathering history...', colorStyle: 'color: #948e85; font-weight: 400;' };
         }
 
-        const now = Date.now();
+        const nowSec = Math.floor(Date.now() / 1000);
+        const target1Sec = nowSec - (THREE_DAYS_S / serverSpeed);
+        const target3Sec = nowSec - (NINE_DAYS_S / serverSpeed);
 
-        const real1DayMs = THREE_DAYS_MS / serverSpeed;
-        const real3DaysMs = NINE_DAYS_MS / serverSpeed;
+        let rec1 = validTuples[0], rec3 = validTuples[0];
+        let minDiff1 = Math.abs(rec1[0] - target1Sec);
+        let minDiff3 = Math.abs(rec3[0] - target3Sec);
 
-        const target1Day = now - real1DayMs;
-        let rec1Day = valid[0];
-        let minDiff1 = Math.abs(rec1Day.t - target1Day);
-        for (let i = 1; i < valid.length; i++) {
-            let diff = Math.abs(valid[i].t - target1Day);
-            if (diff < minDiff1) { minDiff1 = diff; rec1Day = valid[i]; }
+        for (let i = 1; i < validTuples.length; i++) {
+            const t = validTuples[i][0];
+            const d1 = Math.abs(t - target1Sec);
+            const d3 = Math.abs(t - target3Sec);
+            if (d1 < minDiff1) { minDiff1 = d1; rec1 = validTuples[i]; }
+            if (d3 < minDiff3) { minDiff3 = d3; rec3 = validTuples[i]; }
         }
 
-        const target3Days = now - real3DaysMs;
-        let rec3Days = valid[0];
-        let minDiff3 = Math.abs(rec3Days.t - target3Days);
-        for (let i = 1; i < valid.length; i++) {
-            let diff = Math.abs(valid[i].t - target3Days);
-            if (diff < minDiff3) { minDiff3 = diff; rec3Days = valid[i]; }
-        }
-
-        const gain1Day = currentValue - rec1Day.v;
-        const gain3Days = currentValue - rec3Days.v;
-        const gainPrior2Days = Math.max(0, rec1Day.v - rec3Days.v);
-        const avgPriorDailyGain = gainPrior2Days / 2;
+        const gain1Day = currentValue - rec1[1];
+        const gain3Days = currentValue - rec3[1];
+        const avgPriorDailyGain = Math.max(0, rec1[1] - rec3[1]) / 2;
 
         let percentText = '0.00%';
-        if (rec1Day.v > 0) {
-            const pct = ((gain1Day / rec1Day.v) * 100).toFixed(2);
-            if (gain1Day > 0) {
-                percentText = `+${pct}%`;
-            } else if (gain1Day < 0) {
-                percentText = `${pct}%`;
-            }
+        if (rec1[1] > 0) {
+            const pct = ((gain1Day / rec1[1]) * 100).toFixed(2);
+            percentText = gain1Day > 0 ? `+${pct}%` : `${pct}%`;
         }
 
         let pct3dText = '0.00%';
-        if (rec3Days.v > 0) {
-            const pct3 = ((gain3Days / rec3Days.v) * 100).toFixed(2);
-            if (gain3Days > 0) {
-                pct3dText = `+${pct3}%`;
-            } else if (gain3Days < 0) {
-                pct3dText = `${pct3}%`;
-            }
+        if (rec3[1] > 0) {
+            const pct3 = ((gain3Days / rec3[1]) * 100).toFixed(2);
+            pct3dText = gain3Days > 0 ? `+${pct3}%` : `${pct3}%`;
         }
 
         let symbol = '▶\uFE0E';
@@ -371,45 +314,35 @@
         let colorStyle = 'color: #6a5a48; font-weight: 400;';
 
         if (gain1Day === 0) {
-            symbol = '⏸\uFE0E';
-            status = '⏸ Growth paused';
-            colorStyle = 'color: #948e85; font-weight: 400;';
+            symbol = '⏸\uFE0E'; status = '⏸ Growth paused'; colorStyle = 'color: #948e85; font-weight: 400;';
         } else if (gain1Day < 0) {
-            symbol = '▼\uFE0E';
-            status = '▼ Stalled / Declining';
-            colorStyle = 'color: #c5221f; font-weight: 400;';
+            symbol = '▼\uFE0E'; status = '▼ Stalled / Declining'; colorStyle = 'color: #c5221f; font-weight: 400;';
         } else if (avgPriorDailyGain > 0 && gain1Day > (avgPriorDailyGain * 1.25)) {
-            symbol = '▲\uFE0E';
-            status = '▲ Accelerating';
-            colorStyle = 'color: #15803d; font-weight: 400;';
+            symbol = '▲\uFE0E'; status = '▲ Accelerating'; colorStyle = 'color: #15803d; font-weight: 400;';
         } else if (avgPriorDailyGain > 0 && gain1Day < (avgPriorDailyGain * 0.75)) {
-            symbol = '▼\uFE0E';
-            status = '▼ Slowing down';
-            colorStyle = 'color: #c5221f; font-weight: 400;';
+            symbol = '▼\uFE0E'; status = '▼ Slowing down'; colorStyle = 'color: #c5221f; font-weight: 400;';
         }
 
         return { percentText, pct3dText, gain1Day, gain3Days, str1, str3, symbol, status, colorStyle };
     }
 
-    // --- Dynamic Account-Stage Relative Travian Strategy Assessment ---
-
     function getTravianStrategicIntel(playerName, currentValue, metricKey) {
         const serverSpeed = parseFloat(GM_getValue(SERVER_SPEED_KEY, 3)) || 3;
         const pData = gistHistory[playerName] || {};
-        const popHistory = pData['pop_population'] || [];
-        const pvpAttHistory = pData['attack_pvp'] || [];
-        const pvpDefHistory = pData['defense_pvp'] || [];
-        const lootHistory = pData['loot'] || [];
+        const storageKey = KEY_MAP[metricKey] || metricKey;
 
-        const popGain24h = getGainOverHours(popHistory, 24);
-        const pvpGain24h = getGainOverHours(pvpAttHistory, 24);
-        const defGain24h = getGainOverHours(pvpDefHistory, 24);
-        const lootGain24h = getGainOverHours(lootHistory, 24);
+        const popTuples = getValidTuples(pData['pop'] || pData['pop_population']);
+        const pvpAttTuples = getValidTuples(pData['att_pvp'] || pData['attack_pvp']);
+        const pvpDefTuples = getValidTuples(pData['def_pvp'] || pData['defense_pvp']);
+        const lootTuples = getValidTuples(pData['loot']);
 
-        const validPop = getValidHistory(popHistory);
-        const currentPopRec = validPop[validPop.length - 1];
-        const currentPop = (currentPopRec && typeof currentPopRec.v === 'number') ? currentPopRec.v : (metricKey === 'pop_population' ? currentValue : 0);
+        const popGain24h = getGainOverHours(popTuples, 24);
+        const pvpGain24h = getGainOverHours(pvpAttTuples, 24);
+        const defGain24h = getGainOverHours(pvpDefTuples, 24);
+        const lootGain24h = getGainOverHours(lootTuples, 24);
 
+        const currentPopRec = popTuples[popTuples.length - 1];
+        const currentPop = currentPopRec ? currentPopRec[1] : (storageKey === 'pop' ? currentValue : 0);
         const relPopGrowth = currentPop > 0 ? (popGain24h / currentPop) : 0;
 
         const pvpThreshold = Math.max(50, currentPop * 0.08) * serverSpeed;
@@ -417,86 +350,46 @@
         const ecoPopRateThreshold = 0.03 * serverSpeed;
 
         let archetype = "⚖️ Balanced Growth";
-        let statusBg = "#e2e8f0";
-        let statusColor = "#334155";
+        let statusBg = "#e2e8f0"; let statusColor = "#334155";
         let tactic = "Player maintains an even ratio of eco growth and army expansion. Standard scouting advised.";
 
         if (defGain24h > pvpThreshold) {
-            archetype = "💥 Decimated Defense (Heavy Losses)";
-            statusBg = "#fce7f3";
-            statusColor = "#9d174d";
-            tactic = "Player suffered heavy troop casualties defending their village (defense points = lost own def-units). Defensive force is decimated—ideal target for immediate follow-up attack or chiefing!";
+            archetype = "💥 Decimated Defense (Heavy Losses)"; statusBg = "#fce7f3"; statusColor = "#9d174d";
+            tactic = "Player suffered heavy troop casualties defending their village. Defensive force is decimated—ideal target for immediate follow-up attack!";
         } else if (pvpGain24h > pvpThreshold && defGain24h < (pvpThreshold * 0.25)) {
-            archetype = "⚔️ Unpunished Attacker";
-            statusBg = "#fee2e2";
-            statusColor = "#b91c1c";
-            tactic = "Kills many enemy troops on attacks without facing counter-attacks. Has a strong hammer—prepare defense stacks for wave attacks.";
+            archetype = "⚔️ Unpunished Attacker"; statusBg = "#fee2e2"; statusColor = "#b91c1c";
+            tactic = "Kills many enemy troops on attacks without facing counter-attacks. Has a strong hammer—prepare defense stacks.";
         } else if (pvpGain24h > (pvpThreshold * 0.5) && defGain24h > (pvpThreshold * 0.5)) {
-            archetype = "🔥 Two-Way War";
-            statusBg = "#ffedd5";
-            statusColor = "#c2410c";
-            tactic = "Heavy fighting on both sides—killing enemy units on offense while losing troops defending against incoming raids.";
+            archetype = "🔥 Two-Way War"; statusBg = "#ffedd5"; statusColor = "#c2410c";
+            tactic = "Heavy fighting on both sides—killing enemy units on offense while losing troops defending.";
         } else if (relPopGrowth >= ecoPopRateThreshold && pvpGain24h < (pvpThreshold * 0.3) && defGain24h < (pvpThreshold * 0.3)) {
-            archetype = "🏰 Eco Rusher (Simmer)";
-            statusBg = "#dcfce7";
-            statusColor = "#15803d";
-            tactic = "Upgrading fields/buildings for new villages. Zero defensive losses or attack kills—prime target for catapults or chiefing before wall completion.";
+            archetype = "🏰 Eco Rusher (Simmer)"; statusBg = "#dcfce7"; statusColor = "#15803d";
+            tactic = "Upgrading fields/buildings for new villages. Zero defensive losses—prime target for catapults or chiefing.";
         } else if (relPopGrowth <= (0.005 * serverSpeed) && pvpGain24h > pvpThreshold) {
-            archetype = "⚔️ Hammer Builder";
-            statusBg = "#fee2e2";
-            statusColor = "#b91c1c";
-            tactic = "Population growth stalled while offensive points surged. Barracks/Stables running non-stop. Request defense stacks or plan a preventive strike.";
+            archetype = "⚔️ Hammer Builder"; statusBg = "#fee2e2"; statusColor = "#b91c1c";
+            tactic = "Population growth stalled while offensive points surged. Barracks running non-stop. Request defense stacks.";
         } else if (lootGain24h > lootThreshold) {
-            archetype = "🐎 Active Raider";
-            statusBg = "#fef3c7";
-            statusColor = "#b45309";
-            tactic = "High daily loot yield for their account size. Expect fakes and raids. Keep stocks low, build crannies, or plan counter-raid traps on returning troops.";
+            archetype = "🐎 Active Raider"; statusBg = "#fef3c7"; statusColor = "#b45309";
+            tactic = "High daily loot yield for account size. Expect raids. Build crannies or plan counter-raid traps.";
         } else if (popGain24h === 0 && pvpGain24h === 0 && defGain24h === 0 && lootGain24h === 0) {
-            archetype = "💤 Inactive / Potential Farm";
-            statusBg = "#f1f5f9";
-            statusColor = "#64748b";
-            tactic = "Zero growth across all sectors over 24h. Send scouts to verify garrison and resource stocks.";
+            archetype = "💤 Inactive / Potential Farm"; statusBg = "#f1f5f9"; statusColor = "#64748b";
+            tactic = "Zero growth across all sectors over 24h. Send scouts to verify garrison.";
         }
 
         let unit = 'pts';
-        if (metricKey.includes('village')) unit = 'villages';
-        else if (metricKey.includes('pop')) unit = 'pop';
-        else if (metricKey.includes('loot')) unit = 'res';
+        if (storageKey === 'vil') unit = 'villages';
+        else if (storageKey === 'pop') unit = 'pop';
+        else if (storageKey === 'loot') unit = 'res';
 
-        const metric24hGain = getGainOverHours(pData[metricKey] || [], 24);
+        const metric24hGain = getGainOverHours(getValidTuples(pData[storageKey]), 24);
         const proj7d = currentValue + (metric24hGain * 7 * 0.8);
 
         return { archetype, statusBg, statusColor, tactic, proj7d, popGain24h, pvpGain24h, defGain24h, lootGain24h, unit };
     }
 
-    function getActiveCategory() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const cat = urlParams.get('category');
-        if (cat) return cat.toLowerCase();
-
-        const activeTab = document.querySelector('[role="tablist"] a.active, [role="tablist"] a[aria-current="page"]');
-        if (activeTab) {
-            const text = activeTab.textContent.trim().toLowerCase();
-            if (['population', 'attack', 'defense', 'loot'].includes(text)) return text;
-        }
-        return 'population';
-    }
-
-    function isWeeklySelected() {
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('period')?.toLowerCase() === 'weekly') return true;
-
-        const weeklyTab = document.querySelector('#weekly-tab');
-        if (weeklyTab && (weeklyTab.classList.contains('active') || weeklyTab.getAttribute('aria-current') === 'page')) {
-            return true;
-        }
-
-        return false;
-    }
-
     function parseValue(text) {
         if (!text) return 0;
-        const clean = text.replace(/[\s\u00a0]+/g, '').trim();
+        const clean = text.replace(/[\s\u00a0]+/g, '').replace(/\s*\([+\-\d.%\s\u25B2\u25BC\u25BA\u23F8]+\)$/, '').trim();
         const match = clean.match(/([\d\.,]+)\s*([kMbB]?)/);
         if (!match) return 0;
 
@@ -513,24 +406,31 @@
 
     function findLeaderboardTable() {
         const tables = document.querySelectorAll('table, [role="table"]');
-        for (const t of tables) {
-            if (t.querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="alliance"], a[href*="/p/"]')) {
-                return t;
+        for (let i = 0; i < tables.length; i++) {
+            if (tables[i].querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="/p/"]')) {
+                return tables[i];
             }
         }
         return null;
     }
 
     function getMetricsConfig(table) {
-        const category = getActiveCategory();
-        // Target the last header row if headers are stacked
+        const urlParams = new URLSearchParams(window.location.search);
+        let category = urlParams.get('category')?.toLowerCase();
+        if (!category) {
+            const activeTab = document.querySelector('[role="tablist"] a.active, [role="tablist"] a[aria-current="page"]');
+            if (activeTab) category = activeTab.textContent.trim().toLowerCase();
+        }
+        if (!category) category = 'population';
+
         const headerTr = table.querySelector('thead tr:last-child') || table.querySelector('tr');
         const headerThs = headerTr ? Array.from(headerTr.querySelectorAll('th, [role="columnheader"]')) : [];
         const config = [];
 
-        const addConfig = (colIndex, key, label) => {
+        const addConfig = (colIndex, fullKey, label) => {
+            const storageKey = KEY_MAP[fullKey] || fullKey;
             if (!config.some(c => c.colIndex === colIndex)) {
-                config.push({ colIndex, key, label });
+                config.push({ colIndex, key: storageKey, fullKey, label });
             }
         };
 
@@ -538,81 +438,40 @@
             const text = th.textContent.trim().toLowerCase();
             const colIndex = idx + 1;
 
-            if (text.includes('village') || text.includes('town')) {
-                addConfig(colIndex, 'pop_villages', 'Villages');
-            } else if (text.includes('population') || text.includes('pop') || text.includes('score') || text.includes('points')) {
+            if (text.includes('village') || text.includes('town')) addConfig(colIndex, 'pop_villages', 'Villages');
+            else if (text.includes('population') || text.includes('pop') || text.includes('score')) {
                 if (!text.includes('pvp') && !text.includes('pve') && !text.includes('attack') && !text.includes('defense') && !text.includes('loot')) {
                     addConfig(colIndex, 'pop_population', 'Population');
                 }
-            } else if (text.includes('pvp')) {
-                addConfig(colIndex, category === 'defense' ? 'defense_pvp' : 'attack_pvp', 'PvP Points');
-            } else if (text.includes('pve')) {
-                addConfig(colIndex, category === 'defense' ? 'defense_pve' : 'attack_pve', 'PvE Points');
-            } else if (text.includes('loot')) {
-                addConfig(colIndex, 'loot', 'Loot');
-            }
+            } else if (text.includes('pvp')) addConfig(colIndex, category === 'defense' ? 'defense_pvp' : 'attack_pvp', 'PvP Points');
+            else if (text.includes('pve')) addConfig(colIndex, category === 'defense' ? 'defense_pve' : 'attack_pve', 'PvE Points');
+            else if (text.includes('loot')) addConfig(colIndex, 'loot', 'Loot');
         });
 
         if (config.length === 0) {
-            if (category === 'population') {
-                addConfig(3, 'pop_villages', 'Villages');
-                addConfig(4, 'pop_population', 'Population');
-            } else if (category === 'attack') {
-                addConfig(3, 'attack_pvp', 'PvP Attack');
-                addConfig(4, 'attack_pve', 'PvE Attack');
-            } else if (category === 'defense') {
-                addConfig(3, 'defense_pvp', 'PvP Defense');
-                addConfig(4, 'defense_pve', 'PvE Defense');
-            } else if (category === 'loot') {
-                addConfig(3, 'loot', 'Loot');
-            }
+            if (category === 'population') { addConfig(3, 'pop_villages', 'Villages'); addConfig(4, 'pop_population', 'Population'); }
+            else if (category === 'attack') { addConfig(3, 'attack_pvp', 'PvP Attack'); addConfig(4, 'attack_pve', 'PvE Attack'); }
+            else if (category === 'defense') { addConfig(3, 'defense_pvp', 'PvP Defense'); addConfig(4, 'defense_pve', 'PvE Defense'); }
+            else if (category === 'loot') { addConfig(3, 'loot', 'Loot'); }
         }
 
         return config;
-    }
-
-    function canInjectPercentages() {
-        const table = findLeaderboardTable();
-        if (!table) return false;
-
-        const rows = table.querySelectorAll('tbody tr, [role="row"]');
-        if (rows.length === 0) return false;
-
-        const metricsConfig = getMetricsConfig(table);
-        if (metricsConfig.length === 0) return false;
-
-        let validCellFound = false;
-        for (const row of rows) {
-            const tds = Array.from(row.querySelectorAll('td, [role="gridcell"]'));
-            const playerLink = row.querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="alliance"], a[href*="/p/"]') || tds[1]?.querySelector('a');
-            if (playerLink) {
-                for (const m of metricsConfig) {
-                    if (tds[m.colIndex - 1]) {
-                        validCellFound = true;
-                        break;
-                    }
-                }
-            }
-            if (validCellFound) break;
-        }
-
-        return validCellFound;
     }
 
     function processTable() {
         const table = findLeaderboardTable();
         if (!table) return;
 
-        if (isWeeklySelected()) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const isWeekly = urlParams.get('period')?.toLowerCase() === 'weekly' || !!document.querySelector('#weekly-tab.active');
+        if (isWeekly) {
             table.querySelectorAll('.tw-growth-badge').forEach(b => b.remove());
             return;
         }
 
         const isAlliancePage = window.location.pathname.includes('/alliance');
-        const now = Date.now();
-
-        const recordIntervalHours = parseFloat(GM_getValue(RECORD_INTERVAL_KEY, 1)) || 1;
-        const minRecordMs = recordIntervalHours * ONE_HOUR_MS;
+        const nowSec = Math.floor(Date.now() / 1000);
+        const recordIntervalSec = (parseFloat(GM_getValue(RECORD_INTERVAL_KEY, 1)) || 1) * ONE_HOUR_S;
 
         const rows = table.querySelectorAll('tbody tr, [role="row"]');
         if (rows.length === 0) return;
@@ -620,9 +479,26 @@
         const metricsConfig = getMetricsConfig(table);
         let hasNewData = false;
 
+        // Delegated table click listener
+        if (!table.dataset.twDelegated) {
+            table.dataset.twDelegated = 'true';
+            table.addEventListener('click', (e) => {
+                const badge = e.target.closest('.tw-growth-badge');
+                if (badge) {
+                    e.preventDefault(); e.stopPropagation();
+                    openTrendModal(
+                        badge.dataset.player,
+                        badge.dataset.key,
+                        badge.dataset.label,
+                        parseFloat(badge.dataset.val)
+                    );
+                }
+            });
+        }
+
         rows.forEach(row => {
             const tds = Array.from(row.querySelectorAll('td, [role="gridcell"]'));
-            const playerLink = row.querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="alliance"], a[href*="/p/"]') || tds[1]?.querySelector('a');
+            const playerLink = row.querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="/p/"]') || tds[1]?.querySelector('a');
             if (!playerLink) return;
 
             const playerName = playerLink.textContent.trim();
@@ -634,42 +510,32 @@
                 const targetTd = tds[m.colIndex - 1];
                 if (!targetTd) return;
 
-                const cleanTd = targetTd.cloneNode(true);
-                cleanTd.querySelectorAll('.tw-growth-badge').forEach(b => b.remove());
-                const currentValue = parseValue(cleanTd.textContent);
-
+                const currentValue = parseValue(targetTd.textContent);
                 if (currentValue > 1000000000) return;
 
-                if (!gistHistory[playerName][m.key]) gistHistory[playerName][m.key] = [];
-                let catHistory = getValidHistory(gistHistory[playerName][m.key]);
-
+                let catHistory = getValidTuples(gistHistory[playerName][m.key]);
                 const lastRec = catHistory[catHistory.length - 1];
 
                 if (!isAlliancePage) {
                     if (!lastRec) {
-                        catHistory.push({ t: now, v: currentValue });
-                        hasNewData = true;
-                    } else if (currentValue !== lastRec.v) {
-                        catHistory.push({ t: now, v: currentValue });
-                        hasNewData = true;
+                        catHistory.push([nowSec, currentValue]); hasNewData = true;
+                    } else if (currentValue !== lastRec[1]) {
+                        catHistory.push([nowSec, currentValue]); hasNewData = true;
                     } else {
-                        if ((now - lastRec.t) >= minRecordMs) {
+                        if ((nowSec - lastRec[0]) >= recordIntervalSec) {
                             const len = catHistory.length;
-                            if (len >= 2 && catHistory[len - 2].v === currentValue) {
-                                catHistory[len - 1].t = now;
+                            if (len >= 2 && catHistory[len - 2][1] === currentValue) {
+                                catHistory[len - 1][0] = nowSec;
                             } else {
-                                catHistory.push({ t: now, v: currentValue });
+                                catHistory.push([nowSec, currentValue]);
                             }
                             hasNewData = true;
                         }
                     }
 
-                    catHistory = catHistory.filter(r => (now - r.t) <= NINETY_DAYS_MS);
-                    catHistory.sort((a, b) => a.t - b.t);
-
-                    gistHistory[playerName][m.key] = catHistory.map(r => [r.t, r.v]);
-                } else {
-                    gistHistory[playerName][m.key] = catHistory.map(r => [r.t, r.v]);
+                    catHistory = catHistory.filter(r => (nowSec - r[0]) <= NINETY_DAYS_S);
+                    catHistory.sort((a, b) => a[0] - b[0]);
+                    gistHistory[playerName][m.key] = catHistory;
                 }
 
                 const stats = getSpeedScaledGrowthStats(catHistory, currentValue);
@@ -693,23 +559,19 @@
                     container.appendChild(badge);
                 }
 
+                badge.dataset.player = playerName;
+                badge.dataset.key = m.key;
+                badge.dataset.label = m.label;
+                badge.dataset.val = currentValue;
+
                 badge.style.cssText = `font-size: 11px; font-weight: 400; margin-left: 3px; display: inline-block; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; font-variant-emoji: text; ${stats.colorStyle}`;
                 badge.textContent = `(${stats.percentText}${momentumSymbol})`;
                 badge.title = tooltipText;
-
-                badge.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    openTrendModal(playerName, m.key, m.label, currentValue);
-                };
             });
         });
 
         saveLocalHistory();
-
-        if (hasNewData && isGistLoaded && !isAlliancePage) {
-            pushToGistDebounced();
-        }
+        if (hasNewData && isGistLoaded && !isAlliancePage) pushToGistDebounced();
     }
 
     function runDOMPass() {
@@ -748,44 +610,34 @@
                     <div style="position: relative; height: 240px; width: 100%; margin-bottom: 14px;">
                         <canvas id="tw-trend-canvas"></canvas>
                     </div>
-                    <div id="tw-strat-intel" style="background: #f8f4e6; border: 1px solid #6a5a48; padding: 14px; border-radius: 4px;">
-                        <!-- Injected via JS -->
-                    </div>
+                    <div id="tw-strat-intel" style="background: #f8f4e6; border: 1px solid #6a5a48; padding: 14px; border-radius: 4px;"></div>
                 </div>
             `;
             document.body.appendChild(modal);
 
-            document.getElementById('tw-btn-close-chart').onclick = () => {
-                modal.style.display = 'none';
-            };
-
-            modal.onclick = (e) => {
-                if (e.target === modal) {
-                    modal.style.display = 'none';
-                }
-            };
+            document.getElementById('tw-btn-close-chart').onclick = () => { modal.style.display = 'none'; };
+            modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
         }
 
         modal.style.display = 'flex';
         document.getElementById('tw-trend-title').textContent = `${playerName} - ${metricLabel} Intel`;
 
-        const playerHistory = (gistHistory[playerName] && gistHistory[playerName][metricKey]) ? gistHistory[playerName][metricKey] : [];
-        const fullSortedHistory = getValidHistory(playerHistory).sort((a, b) => a.t - b.t);
+        const storageKey = KEY_MAP[metricKey] || metricKey;
+        const playerHistory = (gistHistory[playerName] && gistHistory[playerName][storageKey]) ? gistHistory[playerName][storageKey] : [];
+        const fullSortedTuples = getValidTuples(playerHistory).sort((a, b) => a[0] - b[0]);
 
         function renderChartForDays(daysLimit) {
-            const now = Date.now();
-            const minTime = daysLimit === 90 ? 0 : now - (daysLimit * ONE_DAY_MS);
-            const filteredHistory = fullSortedHistory.filter(r => r.t >= minTime);
+            const nowMs = Date.now();
+            const nowSec = Math.floor(nowMs / 1000);
+            const minTimeSec = daysLimit === 90 ? 0 : nowSec - (daysLimit * ONE_DAY_S);
+            const filteredTuples = fullSortedTuples.filter(r => r[0] >= minTimeSec);
 
-            const chartData = filteredHistory.map(r => ({ x: r.t, y: r.v }));
-
-            if (chartData.length === 0 || chartData[chartData.length - 1].x < now) {
-                chartData.push({ x: now, y: currentValue });
+            const chartData = filteredTuples.map(r => ({ x: r[0] * 1000, y: r[1] }));
+            if (chartData.length === 0 || chartData[chartData.length - 1].x < nowMs) {
+                chartData.push({ x: nowMs, y: currentValue });
             }
 
-            if (activeChart) {
-                activeChart.destroy();
-            }
+            if (activeChart) activeChart.destroy();
 
             const minX = chartData.length > 0 ? chartData[0].x : undefined;
             const maxX = chartData.length > 0 ? chartData[chartData.length - 1].x : undefined;
@@ -796,95 +648,55 @@
                 data: {
                     datasets: [{
                         label: metricLabel,
-                        data: chartData.length > 0 ? chartData : [{ x: Date.now(), y: 0 }],
+                        data: chartData,
                         borderColor: '#165eb9',
                         backgroundColor: 'rgba(22, 94, 185, 0.15)',
                         borderWidth: 2.5,
-                        fill: true,
-                        tension: 0.25,
-                        pointRadius: 3,
-                        pointHoverRadius: 6,
-                        pointBackgroundColor: '#165eb9',
-                        pointBorderColor: '#ffffff',
-                        pointBorderWidth: 1.5
+                        fill: true, tension: 0.25,
+                        pointRadius: 3, pointHoverRadius: 6,
+                        pointBackgroundColor: '#165eb9', pointBorderColor: '#ffffff', pointBorderWidth: 1.5
                     }]
                 },
                 options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: {
-                        mode: 'nearest',
-                        axis: 'x',
-                        intersect: false
-                    },
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
                             callbacks: {
-                                title: function(context) {
+                                title: (context) => {
                                     if (!context || !context.length) return '';
-                                    const timestamp = context[0].parsed.x;
-                                    if (!timestamp) return '';
-                                    const d = new Date(timestamp);
+                                    const ts = context[0].parsed.x;
+                                    if (!ts) return '';
+                                    const d = new Date(ts);
                                     const timeMode = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
                                     if (timeMode === 'utc') {
-                                        const month = d.getUTCMonth() + 1;
-                                        const day = d.getUTCDate();
-                                        const year = d.getUTCFullYear();
-                                        const hours = d.getUTCHours().toString().padStart(2, '0');
-                                        const mins = d.getUTCMinutes().toString().padStart(2, '0');
-                                        return `${month}/${day}/${year} ${hours}:${mins} (UTC)`;
-                                    } else {
-                                        const month = d.getMonth() + 1;
-                                        const day = d.getDate();
-                                        const year = d.getFullYear();
-                                        const hours = d.getHours().toString().padStart(2, '0');
-                                        const mins = d.getMinutes().toString().padStart(2, '0');
-                                        return `${month}/${day}/${year} ${hours}:${mins} (Local)`;
+                                        return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()} ${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')} (UTC)`;
                                     }
+                                    return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')} (Local)`;
                                 },
-                                label: function(context) {
-                                    return `${metricLabel}: ${formatCompact(context.parsed.y)}`;
-                                }
+                                label: (context) => `${metricLabel}: ${formatCompact(context.parsed.y)}`
                             }
                         }
                     },
                     scales: {
                         x: {
-                            type: 'linear',
-                            bounds: 'data',
-                            min: minX,
-                            max: maxX,
+                            type: 'linear', bounds: 'data', min: minX, max: maxX,
                             ticks: {
-                                font: { size: 11 },
-                                color: '#6a5a48',
-                                maxTicksLimit: 7,
-                                callback: function(val) {
+                                font: { size: 11 }, color: '#6a5a48', maxTicksLimit: 7,
+                                callback: (val) => {
                                     const d = new Date(val);
                                     const timeMode = GM_getValue(TIMEZONE_FORMAT_KEY, 'utc');
                                     if (timeMode === 'utc') {
-                                        const month = d.getUTCMonth() + 1;
-                                        const day = d.getUTCDate();
-                                        const hours = d.getUTCHours().toString().padStart(2, '0');
-                                        const mins = d.getUTCMinutes().toString().padStart(2, '0');
-                                        return `${month}/${day} ${hours}:${mins}`;
-                                    } else {
-                                        const month = d.getMonth() + 1;
-                                        const day = d.getDate();
-                                        const hours = d.getHours().toString().padStart(2, '0');
-                                        const mins = d.getMinutes().toString().padStart(2, '0');
-                                        return `${month}/${day} ${hours}:${mins}`;
+                                        return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${d.getUTCHours().toString().padStart(2, '0')}:${d.getUTCMinutes().toString().padStart(2, '0')}`;
                                     }
+                                    return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
                                 }
                             },
                             grid: { color: 'rgba(16,16,16,0.08)' }
                         },
                         y: {
-                            ticks: {
-                                font: { size: 11 },
-                                color: '#6a5a48',
-                                callback: function(val) { return formatCompact(val); }
-                            },
+                            ticks: { font: { size: 11 }, color: '#6a5a48', callback: (val) => formatCompact(val) },
                             grid: { color: 'rgba(16,16,16,0.08)' }
                         }
                     }
@@ -925,13 +737,10 @@
 
     function injectConfigButton() {
         const existingBtn = document.getElementById('tw-gist-config-btn');
-        const isInjectable = canInjectPercentages();
-
-        if (!isInjectable) {
+        if (!canInjectPercentages()) {
             if (existingBtn) existingBtn.remove();
             return;
         }
-
         if (existingBtn) return;
 
         const backBtn = document.querySelector('.lucide-arrow-left')?.closest('button');
@@ -951,10 +760,7 @@
 
     function openGistModal() {
         let modal = document.getElementById('tw-gist-modal');
-        if (modal) {
-            modal.style.display = 'flex';
-            return;
-        }
+        if (modal) { modal.style.display = 'flex'; return; }
 
         modal = document.createElement('div');
         modal.id = 'tw-gist-modal';
@@ -975,11 +781,9 @@
         let statusStyle = 'color: #64748b; background: #f1f5f9; border: 1px solid #cbd5e1;';
 
         if (gistStatus === 'connected') {
-            statusText = '🟢 Connected';
-            statusStyle = 'color: #15803d; background: #dcfce7; border: 1px solid #86efac;';
+            statusText = '🟢 Connected'; statusStyle = 'color: #15803d; background: #dcfce7; border: 1px solid #86efac;';
         } else if (gistStatus === 'error') {
-            statusText = '🔴 Disconnected';
-            statusStyle = 'color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5;';
+            statusText = '🔴 Disconnected'; statusStyle = 'color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5;';
         }
 
         modal.innerHTML = `
@@ -1056,21 +860,12 @@
                 if (val) {
                     openLink.href = `https://gist.github.com/${val}`;
                     openLink.style.display = 'inline';
-                } else {
-                    openLink.style.display = 'none';
-                }
+                } else openLink.style.display = 'none';
             });
         }
 
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                modal.style.display = 'none';
-            }
-        };
-
-        document.getElementById('tw-btn-close-modal').onclick = () => {
-            modal.style.display = 'none';
-        };
+        modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
+        document.getElementById('tw-btn-close-modal').onclick = () => { modal.style.display = 'none'; };
 
         document.getElementById('tw-btn-reset-modal').onclick = () => {
             if (confirm('Are you sure you want to clear all recorded player history? Your Gist ID and Token will be kept.')) {
@@ -1081,10 +876,7 @@
                 saveLocalHistory();
 
                 document.querySelectorAll('.tw-growth-badge').forEach(b => b.remove());
-
-                const statusEl = document.getElementById('tw-gist-status');
-                statusEl.textContent = 'History reset. Syncing to Gist...';
-
+                document.getElementById('tw-gist-status').textContent = 'History reset. Syncing to Gist...';
                 pushToGistDebounced();
             }
         };
@@ -1137,13 +929,9 @@
     let timeout = null;
     observer = new MutationObserver(() => {
         if (timeout) clearTimeout(timeout);
-        timeout = setTimeout(() => {
-            runDOMPass();
-        }, 150);
+        timeout = setTimeout(() => { runDOMPass(); }, 150);
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
-    setTimeout(() => {
-        runDOMPass();
-    }, 300);
+    setTimeout(() => { runDOMPass(); }, 300);
 })();
