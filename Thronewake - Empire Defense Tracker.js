@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake - Empire Defense Tracker
 // @namespace    violentmonkey-thronewake-troops
-// @version      7.3
+// @version      7.4
 // @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown.
 // @author       petrgon
 // @match        *://*.thronewake.com/*
@@ -23,7 +23,7 @@
       box-shadow: inset 0 0 8px rgba(16, 16, 16, 0.25), 0 4px 6px -1px rgba(0, 0, 0, 0.2);
       padding: 4px 8px;
       font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 15px;
+      font-size: inherit;
       font-weight: 400;
       user-select: none;
       box-sizing: border-box;
@@ -40,7 +40,7 @@
         max-width: 92vw;
         margin: 2px auto;
         padding: 4px 6px;
-        font-size: 13px;
+        font-size: inherit;
       }
     }
 
@@ -88,7 +88,7 @@
       font-family: "Josefin Sans Variable", sans-serif;
       font-weight: 400;
       text-transform: uppercase;
-      font-size: 13px;
+      font-size: 0.9em;
       letter-spacing: 0.03em;
       transition: color 0.15s ease;
     }
@@ -98,7 +98,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 4px;
-      font-size: 14px;
+      font-size: 1em;
       padding-top: 1px;
     }
 
@@ -113,14 +113,14 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 14px;
-      height: 14px;
+      width: 1em;
+      height: 1em;
       color: #8a6e46;
     }
 
     .tw-card-val {
       font-weight: 400;
-      font-size: 14px;
+      font-size: 1em;
       color: #101010;
       font-variant-numeric: lining-nums;
     }
@@ -131,11 +131,11 @@
   `);
 
   const ICONS = {
-    defense: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
-    house: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
-    infantry: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
-    cavalry: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20l14-14"/><path d="M19 6h-4V2"/><path d="M14 6l3 3"/></svg>`,
-    scout: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`
+    defense: `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+    house: `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
+    infantry: `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+    cavalry: `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20l14-14"/><path d="M19 6h-4V2"/><path d="M14 6l3 3"/></svg>`,
+    scout: `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`
   };
 
   const DEF_INF_UNITS = ["emberblade", "ember", "shieldbearer", "axeborn", "briar guard", "monolith warden", "carved warrior"];
@@ -181,6 +181,22 @@
       }
     }
     return false;
+  }
+
+  function syncFontSizeWithUpkeep(card, sideMenuContainer) {
+    const srSpans = sideMenuContainer.querySelectorAll('span.sr-only');
+    for (const span of srSpans) {
+      if (span.textContent.trim() === 'Food consumption') {
+        const targetEl = span.parentElement || span.closest('div');
+        if (targetEl) {
+          const computed = window.getComputedStyle(targetEl);
+          if (computed.fontSize) {
+            card.style.fontSize = computed.fontSize;
+          }
+        }
+        break;
+      }
+    }
   }
 
   function parseTroopsFromDOM() {
@@ -334,6 +350,8 @@
       </div>
     `;
 
+    syncFontSizeWithUpkeep(card, sideMenuContainer);
+
     let clickTimer = null;
     card.addEventListener("click", () => {
       if (clickTimer === null) {
@@ -413,7 +431,11 @@
     if (isUpkeepVisible()) {
       createCard();
       const activeCard = document.getElementById("tw-empire-troop-card");
-      if (activeCard) activeCard.style.display = "block";
+      if (activeCard) {
+        activeCard.style.display = "block";
+        const sideMenuContainer = document.querySelector('div.fixed.left-2.z-20, div.fixed.left-4.z-20');
+        if (sideMenuContainer) syncFontSizeWithUpkeep(activeCard, sideMenuContainer);
+      }
 
       const activeVillage = getVillageInfo();
       const liveData = parseTroopsFromDOM();
