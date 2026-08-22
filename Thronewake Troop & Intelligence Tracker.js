@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Troop & Intelligence Tracker
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      4.1
 // @description  High-performance troop tracking with native back-button config style, collapsible player & village intel sections precisely targeted before the Villages container, 24h UTC/Local time settings, compact JSON Gist sync, and strict Escape key isolation.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
