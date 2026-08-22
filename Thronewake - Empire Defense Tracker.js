@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake - Empire Defense Tracker
 // @namespace    violentmonkey-thronewake-troops
-// @version      8.1
+// @version      8.6
 // @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown.
 // @author       petrgon
 // @match        *://*.thronewake.com/*
@@ -22,9 +22,10 @@
       border-radius: 4px;
       box-shadow: inset 0 0 8px rgba(16, 16, 16, 0.25), 0 4px 6px -1px rgba(0, 0, 0, 0.2);
       padding: 2px 6px;
-      margin: 1px 0;
+      margin: 0;
       font-family: inherit;
-      font-size: inherit;
+      font-size: 15px;
+      line-height: 1.25;
       font-weight: inherit;
       user-select: none;
       box-sizing: border-box;
@@ -39,8 +40,7 @@
     @media (max-width: 640px) {
       #tw-empire-troop-card {
         max-width: 92vw;
-        margin: 1px auto;
-        padding: 2px 4px;
+        font-size: 13px;
       }
     }
 
@@ -66,7 +66,7 @@
     .tw-card-title-group {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 3px;
       white-space: nowrap;
       min-width: 0;
     }
@@ -93,6 +93,7 @@
     .tw-card-title {
       color: #8a6e46;
       text-transform: uppercase;
+      font-size: 0.85em;
       letter-spacing: 0.03em;
       white-space: nowrap;
       transition: color 0.15s ease;
@@ -126,6 +127,7 @@
 
     .tw-card-val {
       color: #101010;
+      font-size: 1em;
       font-variant-numeric: lining-nums;
       white-space: nowrap;
     }
