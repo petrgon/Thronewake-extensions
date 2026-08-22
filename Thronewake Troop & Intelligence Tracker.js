@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Troop & Intelligence Tracker
 // @namespace    http://tampermonkey.net/
-// @version      4.1
+// @version      4.2
 // @description  High-performance troop tracking with native back-button config style, collapsible player & village intel sections precisely targeted before the Villages container, 24h UTC/Local time settings, compact JSON Gist sync, and strict Escape key isolation.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
@@ -127,20 +127,7 @@
         if (path.includes('/map/tile/')) {
             return 'village';
         }
-
-        const mainTitle = document.querySelector('h1.font-title')?.textContent || '';
-        if (mainTitle.includes('Combat Report')) {
-            return 'report';
-        }
-
-        if (document.getElementById('village-scroll-container')) {
-            const h2 = document.querySelector('#village-scroll-container h2');
-            if (h2 && h2.textContent.trim().toLowerCase() === 'villages') {
-                return 'player';
-            }
-            return 'village';
-        }
-
+        
         return 'unknown';
     }
 
