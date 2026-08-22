@@ -124,7 +124,7 @@
         if (path.includes('/alliance/')) {
             return 'alliance';
         }
-        if (path.includes('/map/tile/') || path.includes('/village')) {
+        if (path.includes('/map/tile/')) {
             return 'village';
         }
 
