@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake - Empire Defense Tracker
 // @namespace    violentmonkey-thronewake-troops
-// @version      7.4
+// @version      8.1
 // @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown.
 // @author       petrgon
 // @match        *://*.thronewake.com/*
@@ -21,10 +21,11 @@
       border: 2px solid #101010;
       border-radius: 4px;
       box-shadow: inset 0 0 8px rgba(16, 16, 16, 0.25), 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-      padding: 4px 8px;
-      font-family: "Josefin Sans Variable", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 2px 6px;
+      margin: 1px 0;
+      font-family: inherit;
       font-size: inherit;
-      font-weight: 400;
+      font-weight: inherit;
       user-select: none;
       box-sizing: border-box;
       pointer-events: auto;
@@ -38,9 +39,8 @@
     @media (max-width: 640px) {
       #tw-empire-troop-card {
         max-width: 92vw;
-        margin: 2px auto;
-        padding: 4px 6px;
-        font-size: inherit;
+        margin: 1px auto;
+        padding: 2px 4px;
       }
     }
 
@@ -57,22 +57,25 @@
       align-items: center;
       justify-content: space-between;
       gap: 4px;
-      font-weight: 400;
       border-bottom: 1px solid rgba(16, 16, 16, 0.2);
-      padding-bottom: 2px;
-      margin-bottom: 2px;
+      padding-bottom: 1px;
+      margin-bottom: 1px;
+      white-space: nowrap;
     }
 
     .tw-card-title-group {
       display: flex;
       align-items: center;
       gap: 4px;
+      white-space: nowrap;
+      min-width: 0;
     }
 
     .tw-card-sync-group {
       display: none;
       align-items: center;
       gap: 3px;
+      white-space: nowrap;
     }
 
     #tw-empire-troop-card:hover:not(.is-copied) .tw-card-title-group {
@@ -83,13 +86,15 @@
       display: flex;
     }
 
+    #tw-empire-troop-card.is-copied #tw-val-empire {
+      display: none;
+    }
+
     .tw-card-title {
       color: #8a6e46;
-      font-family: "Josefin Sans Variable", sans-serif;
-      font-weight: 400;
       text-transform: uppercase;
-      font-size: 0.9em;
       letter-spacing: 0.03em;
+      white-space: nowrap;
       transition: color 0.15s ease;
     }
 
@@ -98,8 +103,8 @@
       align-items: center;
       justify-content: space-between;
       gap: 4px;
-      font-size: 1em;
-      padding-top: 1px;
+      padding-top: 0px;
+      white-space: nowrap;
     }
 
     .tw-card-sub-item {
@@ -116,13 +121,13 @@
       width: 1em;
       height: 1em;
       color: #8a6e46;
+      flex-shrink: 0;
     }
 
     .tw-card-val {
-      font-weight: 400;
-      font-size: 1em;
       color: #101010;
       font-variant-numeric: lining-nums;
+      white-space: nowrap;
     }
 
     .tw-copied-label {
@@ -181,22 +186,6 @@
       }
     }
     return false;
-  }
-
-  function syncFontSizeWithUpkeep(card, sideMenuContainer) {
-    const srSpans = sideMenuContainer.querySelectorAll('span.sr-only');
-    for (const span of srSpans) {
-      if (span.textContent.trim() === 'Food consumption') {
-        const targetEl = span.parentElement || span.closest('div');
-        if (targetEl) {
-          const computed = window.getComputedStyle(targetEl);
-          if (computed.fontSize) {
-            card.style.fontSize = computed.fontSize;
-          }
-        }
-        break;
-      }
-    }
   }
 
   function parseTroopsFromDOM() {
@@ -350,14 +339,12 @@
       </div>
     `;
 
-    syncFontSizeWithUpkeep(card, sideMenuContainer);
-
     let clickTimer = null;
     card.addEventListener("click", () => {
       if (clickTimer === null) {
+        copySummaryToClipboard(false);
         clickTimer = setTimeout(() => {
           clickTimer = null;
-          copySummaryToClipboard(false);
         }, 800);
       } else {
         clearTimeout(clickTimer);
@@ -431,11 +418,7 @@
     if (isUpkeepVisible()) {
       createCard();
       const activeCard = document.getElementById("tw-empire-troop-card");
-      if (activeCard) {
-        activeCard.style.display = "block";
-        const sideMenuContainer = document.querySelector('div.fixed.left-2.z-20, div.fixed.left-4.z-20');
-        if (sideMenuContainer) syncFontSizeWithUpkeep(activeCard, sideMenuContainer);
-      }
+      if (activeCard) activeCard.style.display = "block";
 
       const activeVillage = getVillageInfo();
       const liveData = parseTroopsFromDOM();
