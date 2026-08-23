@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      18.0
+// @version      18.1
 // @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], persistent modal time range selection across player views, parenthesized badge stripping, negative value support, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
@@ -554,17 +554,14 @@
 
                 if (!isAlliancePage) {
                     if (!lastRec) {
-                        catHistory.push([nowSec, currentValue]); hasNewData = true;
-                    } else if (currentValue !== lastRec[1]) {
-                        catHistory.push([nowSec, currentValue]); hasNewData = true;
-                    } else {
-                        if ((nowSec - lastRec[0]) >= recordIntervalSec) {
-                            const len = catHistory.length;
-                            if (len >= 2 && catHistory[len - 2][1] === currentValue) {
-                                catHistory[len - 1][0] = nowSec;
-                            } else {
-                                catHistory.push([nowSec, currentValue]);
-                            }
+                        catHistory.push([nowSec, currentValue]);
+                        hasNewData = true;
+                    } else if ((nowSec - lastRec[0]) >= recordIntervalSec) {
+                        if (currentValue !== lastRec[1]) {
+                            catHistory.push([nowSec, currentValue]);
+                            hasNewData = true;
+                        } else {
+                            catHistory[catHistory.length - 1][0] = nowSec;
                             hasNewData = true;
                         }
                     }
