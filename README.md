@@ -89,3 +89,19 @@ Automatically gathers combat report data to track player garrisons, calculate of
   <img width="642" height="520" alt="image" src="https://github.com/user-attachments/assets/a99e81d2-5e4a-4320-9f80-d09cd87c6fec" />
   <img width="620" height="249" alt="image" src="https://github.com/user-attachments/assets/bfabfbbb-f46e-4df7-8e58-0b171dfc8e33" />
 </p>
+
+
+### 5. [Thronewake - Trade Route & Income Visualizer](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20-%20Trade%20Route%20%26%20Income%20Visualizer.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20-%20Trade%20Route%20%26%20Income%20Visualizer.js))
+Visualizes your empire's trade networks, net village resource flows, and custom territory markers on an interactive SVG canvas.
+
+* **Interactive SVG Territory Map**: Displays an overlay map showing all your discovered villages, active trade routes, and custom points of interest in a clean visual network.
+* **Detailed Net Income Tooltips**: Hover over any village to view hourly production rates broken down by base production, incoming trade, and outgoing shipments (`base` | `in` | `out`).
+* **Non-Overlapping Directional Routes**: Separates overlapping and opposing trade paths using dynamic curvature and directional mid-route arrows to maintain map clarity.
+* **Cargo Color-Coding**: Color-codes routes based on their contents—Lumber, Stone, Metal, Meat, or Mixed loads—for quick identification of resource routes.
+* **Custom Map Markers**: Add custom markers anywhere on the map with user-defined titles, notes, coordinates, and colors to track targets, outposts, or strategic points.
+* **Linked Sidebar & Tile Navigation**: Features sorted sidebar lists with bidirectional hover-highlighting between the list and graph, plus single-click map tile navigation.
+
+<p align="left">
+  <img width="1603" height="976" alt="image" src="https://github.com/user-attachments/assets/e81a0498-7eb8-41c6-84e6-f45ee37ed8f8" />
+  <img width="1602" height="972" alt="image" src="https://github.com/user-attachments/assets/fd5872f4-a816-467a-828e-3a086b31a1b7" />
+</p>
