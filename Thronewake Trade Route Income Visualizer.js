@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      4.9
-// @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, and state storage.
+// @version      5.0
+// @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, and state storage.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
 // @grant        GM_setValue
@@ -153,7 +153,6 @@
         const section = header ? header.closest('section') : document.getElementById('marketplace-send-panel');
         if (!section) return 0;
 
-        // Scrape strictly inside the Trade Routes section container
         const routeCards = section.querySelectorAll('ul > li.paper');
         const foundRoutes = [];
 
@@ -217,7 +216,6 @@
                 }
             });
 
-            // Unique route ID using card index to prevent overwriting parallel routes
             const routeId = `route_${origin.x}_${origin.y}_to_${toX}_${toY}_idx_${cardIdx}`;
             foundRoutes.push({
                 id: routeId,
@@ -711,6 +709,43 @@
             tooltip.style.display = 'none';
         }
 
+        // Helper: Activate village highlight & tooltip
+        function activateVillageHighlight(v, mouseEvent) {
+            let incWood = 0, incClay = 0, incIron = 0, incCrop = 0;
+            let outWood = 0, outClay = 0, outIron = 0, outCrop = 0;
+
+            routes.forEach(r => {
+                if (r.toX === v.x && r.toY === v.y) {
+                    incWood += (r.wood || 0);
+                    incClay += (r.clay || 0);
+                    incIron += (r.iron || 0);
+                    incCrop += (r.crop || 0);
+                }
+                if (r.fromX === v.x && r.fromY === v.y) {
+                    outWood += (r.wood || 0);
+                    outClay += (r.clay || 0);
+                    outIron += (r.iron || 0);
+                    outCrop += (r.crop || 0);
+                }
+            });
+
+            tooltip.style.display = 'block';
+            tooltip.style.left = (mouseEvent.clientX + 15) + 'px';
+            tooltip.style.top = (mouseEvent.clientY + 15) + 'px';
+            tooltip.innerHTML = `
+                <strong style="color:#fff">${v.name} (${v.x}|${v.y})</strong><br/>
+                ${formatResourceTooltipLine('🌲', 'Lumber', v.wood || 0, incWood, outWood)}<br/>
+                ${formatResourceTooltipLine('🧱', 'Stone', v.clay || 0, incClay, outClay)}<br/>
+                ${formatResourceTooltipLine('⛏️', 'Metal', v.iron || 0, incIron, outIron)}<br/>
+                ${formatResourceTooltipLine('🥩', 'Meat', v.crop || 0, incCrop, outCrop)}<br/>
+            `;
+        }
+
+        // Helper: Reset village highlight & hide tooltip
+        function deactivateVillageHighlight() {
+            tooltip.style.display = 'none';
+        }
+
         // --- Render Trade Routes on SVG ---
         routes.forEach(r => {
             const x1 = mapX(r.fromX), y1 = mapY(r.fromY);
@@ -794,37 +829,9 @@
                 window.location.href = `/map/tile/${v.x}/${v.y}?center=true`;
             };
 
-            g.onmousemove = (e) => {
-                let incWood = 0, incClay = 0, incIron = 0, incCrop = 0;
-                let outWood = 0, outClay = 0, outIron = 0, outCrop = 0;
+            g.onmousemove = (e) => activateVillageHighlight(v, e);
+            g.onmouseleave = () => deactivateVillageHighlight();
 
-                routes.forEach(r => {
-                    if (r.toX === v.x && r.toY === v.y) {
-                        incWood += (r.wood || 0);
-                        incClay += (r.clay || 0);
-                        incIron += (r.iron || 0);
-                        incCrop += (r.crop || 0);
-                    }
-                    if (r.fromX === v.x && r.fromY === v.y) {
-                        outWood += (r.wood || 0);
-                        outClay += (r.clay || 0);
-                        outIron += (r.iron || 0);
-                        outCrop += (r.crop || 0);
-                    }
-                });
-
-                tooltip.style.display = 'block';
-                tooltip.style.left = (e.clientX + 15) + 'px';
-                tooltip.style.top = (e.clientY + 15) + 'px';
-                tooltip.innerHTML = `
-                    <strong style="color:#fff">${v.name} (${v.x}|${v.y})</strong><br/>
-                    ${formatResourceTooltipLine('🌲', 'Lumber', v.wood || 0, incWood, outWood)}<br/>
-                    ${formatResourceTooltipLine('🧱', 'Stone', v.clay || 0, incClay, outClay)}<br/>
-                    ${formatResourceTooltipLine('⛏️', 'Metal', v.iron || 0, incIron, outIron)}<br/>
-                    ${formatResourceTooltipLine('🥩', 'Meat', v.crop || 0, incCrop, outCrop)}<br/>
-                `;
-            };
-            g.onmouseleave = () => tooltip.style.display = 'none';
             nodesGroupElement.appendChild(g);
         });
 
@@ -890,6 +897,8 @@
             div.onclick = () => {
                 window.location.href = `/map/tile/${v.x}/${v.y}?center=true`;
             };
+            div.onmousemove = (e) => activateVillageHighlight(v, e);
+            div.onmouseleave = () => deactivateVillageHighlight();
             sidebarList.appendChild(div);
         });
 
