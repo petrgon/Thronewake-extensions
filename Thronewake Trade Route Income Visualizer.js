@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      5.0
-// @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, and state storage.
+// @version      5.1
+// @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, tab-aware route scraping protection, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, and state storage.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
 // @grant        GM_setValue
@@ -150,6 +150,11 @@
         if (!origin) return 0;
 
         const header = findTradeRoutesHeader();
+        const isTradeRoutesTab = window.location.href.includes('tab=marketplace-send') || !!header;
+
+        // Safety Guard: Do not modify/overwrite stored routes if the user is on another tab/view
+        if (!isTradeRoutesTab) return 0;
+
         const section = header ? header.closest('section') : document.getElementById('marketplace-send-panel');
         if (!section) return 0;
 
@@ -399,7 +404,7 @@
             .tw-legend-item:last-child { margin-bottom: 0; }
             .tw-legend-color { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
             .tw-route-path, .tw-route-arrow { transition: opacity 0.15s ease, stroke-width 0.15s ease; }
-
+            
             #tw-add-custom-btn {
                 position: absolute; top: 12px; left: 12px; z-index: 10000;
                 background: #165eb9; color: #fff; border: 1px solid var(--tw-paper-brown);
@@ -879,7 +884,7 @@
 
         // --- Render Sorted Sidebar Content ---
 
-        // 1. Sidebar: Sorted Villages
+        // 1. Sidebar: Sorted Villages (Linked Hover Tooltip)
         const sortedVillages = [...villages].sort((a, b) =>
             (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
         );
