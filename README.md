@@ -75,6 +75,8 @@ An interactive travel duration, distance, and UTC arrival time calculator built 
   <img width="731" height="821" alt="image" src="https://github.com/user-attachments/assets/76a339d8-2c57-4fe1-a348-61c9443db570" />
 </p>
 
+---
+
 ### 4. [Thronewake - Troop & Intelligence Tracker](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Troop%20%26%20Intelligence%20Tracker.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20Troop%20%26%20Intelligence%20Tracker.js))
 Automatically gathers combat report data to track player garrisons, calculate offensive hammer power (HMR) and defense (DEF), and synchronize intelligence across your devices.
 
@@ -90,6 +92,7 @@ Automatically gathers combat report data to track player garrisons, calculate of
   <img width="620" height="249" alt="image" src="https://github.com/user-attachments/assets/bfabfbbb-f46e-4df7-8e58-0b171dfc8e33" />
 </p>
 
+---
 
 ### 5. [Thronewake - Trade Route & Income Visualizer](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Trade%20Route%20Income%20Visualizer.js) ([Direct Install]([https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20-%20Trade%20Route%20%26%20Income%20Visualizer.js](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/refs/heads/main/Thronewake%20Trade%20Route%20Income%20Visualizer.js)))
 Visualizes your empire's trade networks, net village resource flows, and custom territory markers on an interactive SVG canvas.
