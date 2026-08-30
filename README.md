@@ -94,7 +94,7 @@ Automatically gathers combat report data to track player garrisons, calculate of
 
 ---
 
-### 5. [Thronewake - Trade Route & Income Visualizer](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Trade%20Route%20Income%20Visualizer.js) ([Direct Install]([https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20-%20Trade%20Route%20%26%20Income%20Visualizer.js](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/refs/heads/main/Thronewake%20Trade%20Route%20Income%20Visualizer.js)))
+### 5. [Thronewake - Trade Route & Income Visualizer](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Trade%20Route%20Income%20Visualizer.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/refs/heads/main/Thronewake%20Trade%20Route%20Income%20Visualizer.js))
 Visualizes your empire's trade networks, net village resource flows, and custom territory markers on an interactive SVG canvas.
 
 * **Interactive SVG Territory Map**: Displays an overlay map showing all your discovered villages, active trade routes, and custom points of interest in a clean visual network.
