@@ -4,6 +4,11 @@ A collection of Userscripts designed to enhance gameplay, tracking, and strategy
 
 ---
 
+## Contribution
+Feel free to copy and update as you wish. Feel free to push a pull request. I will add you as contributor.
+
+---
+
 ## 🛠️ How to Install Any Extension
 
 1. Install a Userscript Manager extension for your browser:
