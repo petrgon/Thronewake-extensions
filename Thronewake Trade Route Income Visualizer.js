@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      5.6
+// @version      5.7
 // @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, tab-aware route scraping protection, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, state storage, smart screen-aware tooltips, and mobile responsiveness.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
@@ -615,7 +615,7 @@
                             <div class="tw-legend-item"><span class="tw-legend-color" style="background:#b45309;"></span> Wood (Lumber)</div>
                             <div class="tw-legend-item"><span class="tw-legend-color" style="background:#94a3b8;"></span> Stone (Clay)</div>
                             <div class="tw-legend-item"><span class="tw-legend-color" style="background:#38bdf8;"></span> Iron (Metal)</div>
-                            <div class="tw-legend-item"><span class="tw-legend-color" style="background:#f43f5e;"></span> Food (Crops)</div>
+                            <div class="tw-legend-item"><span class="tw-legend-color" style="background:#f43f5e;"></span> Food (Crop)</div>
                         </div>
                     </div>
                 </div>
@@ -786,7 +786,7 @@
             ${formatResourceTooltipLine('🌲', 'Lumber', v.wood || 0, incWood, outWood)}<br/>
             ${formatResourceTooltipLine('🧱', 'Stone', v.clay || 0, incClay, outClay)}<br/>
             ${formatResourceTooltipLine('⛏️', 'Metal', v.iron || 0, incIron, outIron)}<br/>
-            ${formatResourceTooltipLine('🥩', 'Meat', v.crop || 0, incCrop, outCrop)}
+            ${formatResourceTooltipLine('🥩', 'Food', v.crop || 0, incCrop, outCrop)}
             ${window.innerWidth <= 768 ? '<br/><span style="font-size:10px; color:#ffc107;">Tap again to navigate</span>' : ''}
         `;
     }
@@ -806,7 +806,7 @@
             🌲 Lumber: +${(r.wood || 0).toLocaleString()}/h<br/>
             🧱 Stone: +${(r.clay || 0).toLocaleString()}/h<br/>
             ⛏️ Metal: +${(r.iron || 0).toLocaleString()}/h<br/>
-            🥩 Meat: +${(r.crop || 0).toLocaleString()}/h
+            🥩 Food: +${(r.crop || 0).toLocaleString()}/h
         `;
     }
 
