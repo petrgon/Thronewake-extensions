@@ -15,7 +15,7 @@ Feel free to copy and update as you wish. Feel free to push a pull request. I wi
    * [Violentmonkey](https://violentmonkey.github.io/) (Recommended)
    * [Tampermonkey](https://www.tampermonkey.net/) (Works on iOS)
    * [Greasemonkey](https://www.greasyfork.org/)
-2. Click any of the extension titles below and select **Raw** (or click **Direct Install**) to automatically trigger the installation prompt in your Userscript manager.
+2. Click any of the extension titles below and select **Raw** (or click **Direct Install**) to get the URL.
 
 ---
 
@@ -112,4 +112,20 @@ Visualizes your empire's trade networks, net village resource flows, and custom 
 <p align="left">
   <img width="1603" height="976" alt="image" src="https://github.com/user-attachments/assets/e81a0498-7eb8-41c6-84e6-f45ee37ed8f8" />
   <img width="1602" height="972" alt="image" src="https://github.com/user-attachments/assets/fd5872f4-a816-467a-828e-3a086b31a1b7" />
+</p>
+
+---
+
+### 6. [Thronewake Safe Time Tracker]([https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Safe%20Time%20Tracker.js](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Safe%20Time%20Tracker.js)) ([Direct Install]([https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20Safe%20Time%20Tracker.js](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/refs/heads/main/Thronewake%20Safe%20Time%20Tracker.js)))
+Automatically tracks, records, and calculates target players' Safe Time windows and boundaries directly from the Rally Point.
+
+* **Automatic Rally Point Scanner**: Detects troop arrival times and captures whether a target player's village mission is blocked or unblocked.
+* **Smart Window Deduction**: Calculates exact observed blocked spans and deduces potential 6-hour Safe Time boundaries with circular wrap-around handling across midnight.
+* **Unified Header Tools Menu**: Integrates directly into the game's top bar, automatically grouping into a collapsible `Tools ▾` dropdown alongside overlays like Trade Graph.
+* **Cloud Gist Synchronization**: Syncs recorded target player data and sample history to a private GitHub Gist with instant deletion sync.
+* **Direct Profile Navigation**: Click player names or alliance tags inside the tracker to navigate directly to their in-game profile pages with dynamic path resolution.
+* **Responsive & Mobile Optimized**: Responsive UI overlay with compact mobile labels (`ST`, `TG`) tailored for touch devices and desktop displays.
+
+<p align="left">
+  <img width="601" height="585" alt="image" src="https://github.com/user-attachments/assets/40162c67-ebed-4748-a859-c9d9635133ab" />
 </p>
