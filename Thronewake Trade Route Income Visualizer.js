@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      5.4
+// @version      5.5
 // @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, tab-aware route scraping protection, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, state storage, smart screen-aware tooltips, and mobile responsiveness.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
@@ -405,7 +405,7 @@
                 position: fixed; background: #141210; border: 1px solid var(--tw-paper-brown);
                 color: var(--tw-paper-light); padding: 10px 14px; border-radius: 4px;
                 pointer-events: none; display: none; z-index: 10000000; font-size: 12px;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.8); max-width: 280px; word-break: break-word;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.8); max-width: 350px; word-break: break-word;
             }
             .tw-list-item {
                 background: #23201c; padding: 8px 10px; margin-bottom: 6px;
