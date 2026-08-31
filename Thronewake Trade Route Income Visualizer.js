@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      5.5
+// @version      5.6
 // @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, tab-aware route scraping protection, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, state storage, smart screen-aware tooltips, and mobile responsiveness.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
@@ -610,12 +610,12 @@
                         <svg id="tw-svg" width="100%" height="100%"></svg>
                         <div class="tw-legend">
                             <strong style="display:block; margin-bottom: 6px; border-bottom: 1px solid #332e28; padding-bottom: 2px;">Route Color Legend</strong>
-                            <div class="tw-legend-item"><span class="tw-legend-color" style="background:#fbbf24;"></span> Mixed (with Meat)</div>
-                            <div class="tw-legend-item"><span class="tw-legend-color" style="background:#a855f7;"></span> Mixed (without Meat)</div>
+                            <div class="tw-legend-item"><span class="tw-legend-color" style="background:#fbbf24;"></span> Mixed (with Food)</div>
+                            <div class="tw-legend-item"><span class="tw-legend-color" style="background:#a855f7;"></span> Mixed (without Food)</div>
                             <div class="tw-legend-item"><span class="tw-legend-color" style="background:#b45309;"></span> Wood (Lumber)</div>
                             <div class="tw-legend-item"><span class="tw-legend-color" style="background:#94a3b8;"></span> Stone (Clay)</div>
                             <div class="tw-legend-item"><span class="tw-legend-color" style="background:#38bdf8;"></span> Iron (Metal)</div>
-                            <div class="tw-legend-item"><span class="tw-legend-color" style="background:#f43f5e;"></span> Meat</div>
+                            <div class="tw-legend-item"><span class="tw-legend-color" style="background:#f43f5e;"></span> Food (Crops)</div>
                         </div>
                     </div>
                 </div>
