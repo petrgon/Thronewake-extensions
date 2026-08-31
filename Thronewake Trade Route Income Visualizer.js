@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      5.2
+// @version      5.3
 // @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, tab-aware route scraping protection, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, state storage, smart screen-aware tooltips, and mobile responsiveness.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
@@ -27,6 +27,10 @@
         } catch (e) {
             return { villages: {}, routes: [], customItems: [] };
         }
+    }
+
+    function isMobile(window) {
+        return window.innerWidth <= 768;
     }
 
     function saveState(stateData) {
@@ -518,8 +522,7 @@
 
         // Click / Touch interaction
         el.onclick = (e) => {
-            const isMobile = window.innerWidth <= 768;
-            if (isMobile) {
+            if (isMobile(window)) {
                 if (activeMobileItemId !== itemId) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -711,7 +714,11 @@
         if (targetEl) {
             const btn = document.createElement('button');
             btn.id = 'tw-graph-btn';
-            btn.innerHTML = 'Trade Graph';
+            if (isMobile(window)) {
+                btn.innerHTML = 'TG';
+            } else {
+                btn.innerHTML = 'Trade Graph';
+            }
             btn.onclick = (e) => {
                 e.stopPropagation();
                 scrapePageVillageData();
