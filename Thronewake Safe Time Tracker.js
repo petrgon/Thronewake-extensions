@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Safe Time Tracker
 // @namespace    http://tampermonkey.net/
-// @version      5.3
+// @version      5.4
 // @description  Track and deduce target players' Safe Times from Rally Point troop arrival blocks
 // @author       You
 // @match        *://*.thronewake.com/*
@@ -441,7 +441,13 @@
         document.head.appendChild(styleNode);
     }
 
-    // --- Gist Sync Logic ---
+    // --- Gist Sync Logic & Throttling ---
+    let lastPushTime = 0;
+    let pushTimeout = null;
+    let isPushing = false;
+    let hasPendingPush = false;
+    const MIN_PUSH_INTERVAL_MS = 10000; // Enforce minimum 10s between GitHub PATCH requests
+
     function updateGistIndicator(status, message = '') {
         gistStatus = status;
         const el = document.getElementById('st-gist-indicator');
@@ -505,7 +511,7 @@
                         const file = data.files['thronewake_safetime.json'] || data.files['embermark_safetime.json'];
                         if (file && file.content) {
                             const parsed = JSON.parse(file.content);
-
+                            
                             const tz = parsed.tz || parsed.timeZoneMode;
                             if (tz) { timeZoneMode = tz; GM_setValue(STORAGE_TZ_MODE, timeZoneMode); }
 
@@ -546,17 +552,33 @@
         });
     }
 
-    let pushDebounceTimer = null;
     function pushToGist(immediate = false) {
         const token = ghToken.trim();
         const id = gistId.trim();
 
         if (!token || !id) return;
 
-        clearTimeout(pushDebounceTimer);
+        hasPendingPush = true;
+
+        if (pushTimeout) {
+            clearTimeout(pushTimeout);
+            pushTimeout = null;
+        }
+
+        const now = Date.now();
+        const elapsed = now - lastPushTime;
 
         const executePush = () => {
+            if (isPushing) {
+                hasPendingPush = true;
+                return;
+            }
+
+            isPushing = true;
+            hasPendingPush = false;
+            lastPushTime = Date.now();
             updateGistIndicator('syncing');
+
             const contentData = prepareCompactGistData();
             const authHeader = token.startsWith('ghp_') || token.startsWith('github_pat_') ? `token ${token}` : `Bearer ${token}`;
 
@@ -571,21 +593,33 @@
                 },
                 data: JSON.stringify({ files: { 'thronewake_safetime.json': { content: JSON.stringify(contentData) } } }),
                 onload: function (res) {
+                    isPushing = false;
                     if (res.status === 200) {
                         updateGistIndicator('connected');
                     } else {
-                        const errMsg = res.status === 403 ? '403 Not Gist Owner' : (res.status === 401 ? '401 Bad Token' : (res.status === 404 ? '404 Bad Gist ID' : `Push Error ${res.status}`));
+                        const errMsg = res.status === 403 ? '403 Rate Limit / Owner' : (res.status === 401 ? '401 Bad Token' : (res.status === 404 ? '404 Bad Gist ID' : `Push Error ${res.status}`));
                         updateGistIndicator('error', errMsg);
                     }
+                    if (hasPendingPush) {
+                        pushToGist(false);
+                    }
                 },
-                onerror: function () { updateGistIndicator('error', 'Network Error'); }
+                onerror: function () {
+                    isPushing = false;
+                    updateGistIndicator('error', 'Network Error');
+                }
             });
         };
 
-        if (immediate) {
+        if (immediate && !isPushing && elapsed >= 3000) {
             executePush();
         } else {
-            pushDebounceTimer = setTimeout(executePush, 800);
+            const delay = Math.max(1000, MIN_PUSH_INTERVAL_MS - elapsed);
+            pushTimeout = setTimeout(() => {
+                if (hasPendingPush && !isPushing) {
+                    executePush();
+                }
+            }, delay);
         }
     }
 
@@ -1199,7 +1233,18 @@
     }
 
     mountHeaderMenu();
-    const observer = new MutationObserver(() => scanRallyPoint());
+
+    // Throttled observer to prevent infinite re-entry or scanning overload
+    let scanTimeout = null;
+    const observer = new MutationObserver(() => {
+        if (!scanTimeout) {
+            scanTimeout = setTimeout(() => {
+                scanTimeout = null;
+                scanRallyPoint();
+            }, 300);
+        }
+    });
+
     observer.observe(document.body, { childList: true, subtree: true });
 
 })();
