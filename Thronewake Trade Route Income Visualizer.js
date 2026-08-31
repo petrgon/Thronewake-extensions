@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      5.3
+// @version      5.4
 // @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, tab-aware route scraping protection, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, state storage, smart screen-aware tooltips, and mobile responsiveness.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
@@ -27,10 +27,6 @@
         } catch (e) {
             return { villages: {}, routes: [], customItems: [] };
         }
-    }
-
-    function isMobile(window) {
-        return window.innerWidth <= 768;
     }
 
     function saveState(stateData) {
@@ -205,6 +201,18 @@
                 };
             }
 
+            // Extract Repeat Interval (e.g. "Every 2h" -> 2)
+            const cardText = card.textContent;
+            const repeatMatch = cardText.match(/Every\s+(\d+)h/i);
+            const repeatHours = repeatMatch ? parseInt(repeatMatch[1], 10) : 1;
+
+            // Extract Deliveries Count (e.g. "1 delivery", "2 deliveries" -> 1 or 2)
+            const deliveryMatch = cardText.match(/(\d+)\s+deliveries?/i);
+            const deliveries = deliveryMatch ? parseInt(deliveryMatch[1], 10) : 1;
+
+            // Calculate overall hourly factor
+            const hourlyMultiplier = deliveries / (repeatHours || 1);
+
             let wood = 0, clay = 0, iron = 0, crop = 0;
             const resBoxes = card.querySelectorAll('div.flex.items-center.gap-1');
 
@@ -225,6 +233,12 @@
                 }
             });
 
+            // Convert to true rate per hour
+            const hourlyWood = Math.round(wood * hourlyMultiplier);
+            const hourlyClay = Math.round(clay * hourlyMultiplier);
+            const hourlyIron = Math.round(iron * hourlyMultiplier);
+            const hourlyCrop = Math.round(crop * hourlyMultiplier);
+
             const routeId = `route_${origin.x}_${origin.y}_to_${toX}_${toY}_idx_${cardIdx}`;
             foundRoutes.push({
                 id: routeId,
@@ -233,10 +247,16 @@
                 toX: toX,
                 toY: toY,
                 destName: destName,
-                wood: wood,
-                clay: clay,
-                iron: iron,
-                crop: crop
+                wood: hourlyWood,
+                clay: hourlyClay,
+                iron: hourlyIron,
+                crop: hourlyCrop,
+                repeatHours: repeatHours,
+                deliveries: deliveries,
+                rawWood: wood,
+                rawClay: clay,
+                rawIron: iron,
+                rawCrop: crop
             });
         });
 
@@ -522,7 +542,8 @@
 
         // Click / Touch interaction
         el.onclick = (e) => {
-            if (isMobile(window)) {
+            const isMobile = window.innerWidth <= 768;
+            if (isMobile) {
                 if (activeMobileItemId !== itemId) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -714,11 +735,7 @@
         if (targetEl) {
             const btn = document.createElement('button');
             btn.id = 'tw-graph-btn';
-            if (isMobile(window)) {
-                btn.innerHTML = 'TG';
-            } else {
-                btn.innerHTML = 'Trade Graph';
-            }
+            btn.innerHTML = 'Trade Graph';
             btn.onclick = (e) => {
                 e.stopPropagation();
                 scrapePageVillageData();
@@ -777,11 +794,15 @@
     function getRouteTooltipHtml(r) {
         const fromName = getVillageName(r.fromX, r.fromY);
         const toName = r.destName || getVillageName(r.toX, r.toY);
+        const schedInfo = (r.repeatHours && r.deliveries)
+            ? `<span style="color:#aaa;">Schedule: ${r.deliveries}x delivery every ${r.repeatHours}h</span><br/>`
+            : '';
 
         return `
             <strong style="color:var(--tw-paper-light)">Trade Route Details</strong><br/>
             From: <strong>${fromName}</strong> (${r.fromX}|${r.fromY})<br/>
             To: <strong>${toName}</strong> (${r.toX}|${r.toY})<br/>
+            ${schedInfo}
             🌲 Lumber: +${(r.wood || 0).toLocaleString()}/h<br/>
             🧱 Stone: +${(r.clay || 0).toLocaleString()}/h<br/>
             ⛏️ Metal: +${(r.iron || 0).toLocaleString()}/h<br/>
