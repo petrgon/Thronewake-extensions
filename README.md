@@ -116,7 +116,7 @@ Visualizes your empire's trade networks, net village resource flows, and custom 
 
 ---
 
-### 6. [Thronewake Safe Time Tracker]([https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Safe%20Time%20Tracker.js](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Safe%20Time%20Tracker.js)) ([Direct Install]([https://raw.githubusercontent.com/petrgon/Thronewake-extensions/main/Thronewake%20Safe%20Time%20Tracker.js](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/refs/heads/main/Thronewake%20Safe%20Time%20Tracker.js)))
+### 6. [Thronewake Safe Time Tracker](https://github.com/petrgon/Thronewake-extensions/blob/main/Thronewake%20Safe%20Time%20Tracker.js) ([Direct Install](https://raw.githubusercontent.com/petrgon/Thronewake-extensions/refs/heads/main/Thronewake%20Safe%20Time%20Tracker.js))
 Automatically tracks, records, and calculates target players' Safe Time windows and boundaries directly from the Rally Point.
 
 * **Automatic Rally Point Scanner**: Detects troop arrival times and captures whether a target player's village mission is blocked or unblocked.
