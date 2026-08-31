@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      5.1
-// @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, tab-aware route scraping protection, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, and state storage.
+// @version      5.2
+// @description  Parses village income and trade routes with SVG map visualization, curved non-overlapping routes, mid-route arrows, dynamic status updates, tab-aware route scraping protection, section-scoped DOM selector targeting, unique route card indexing, sorted sidebar lists with linked village/route hover tooltips, intuitive stone-gray color coding, detailed resource breakdown tooltips, non-blocking label hitboxes, tile navigation, state storage, smart screen-aware tooltips, and mobile responsiveness.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
 // @grant        GM_setValue
@@ -14,6 +14,7 @@
     'use strict';
 
     const STORAGE_KEY = 'tw_auto_visualizer_data_v3';
+    let activeMobileItemId = null;
 
     // --- State Storage ---
     function loadState() {
@@ -152,7 +153,6 @@
         const header = findTradeRoutesHeader();
         const isTradeRoutesTab = window.location.href.includes('tab=marketplace-send') || !!header;
 
-        // Safety Guard: Do not modify/overwrite stored routes if the user is on another tab/view
         if (!isTradeRoutesTab) return 0;
 
         const section = header ? header.closest('section') : document.getElementById('marketplace-send-panel');
@@ -310,7 +310,6 @@
         }, 300);
     }
 
-    // --- Intuitive High-Contrast Route Color Determination ---
     function getRouteColor(route) {
         const hasWood = (route.wood || 0) > 0;
         const hasClay = (route.clay || 0) > 0;
@@ -319,14 +318,14 @@
         const count = [hasWood, hasClay, hasIron, hasCrop].filter(Boolean).length;
 
         if (count === 1) {
-            if (hasWood) return '#b45309'; // Timber Amber Brown
-            if (hasClay) return '#94a3b8'; // Stone Gray
-            if (hasIron) return '#38bdf8'; // Steel Cyan Blue
-            if (hasCrop) return '#f43f5e'; // Fresh Meat Red
+            if (hasWood) return '#b45309';
+            if (hasClay) return '#94a3b8';
+            if (hasIron) return '#38bdf8';
+            if (hasCrop) return '#f43f5e';
         }
 
         if (count > 1) {
-            return hasCrop ? '#fbbf24' : '#a855f7'; // Gold (with Meat) : Royal Purple (without Meat)
+            return hasCrop ? '#fbbf24' : '#a855f7';
         }
 
         return '#165eb9';
@@ -382,7 +381,7 @@
                 position: fixed; background: #141210; border: 1px solid var(--tw-paper-brown);
                 color: var(--tw-paper-light); padding: 10px 14px; border-radius: 4px;
                 pointer-events: none; display: none; z-index: 10000000; font-size: 12px;
-                box-shadow: 0 4px 15px rgba(0,0,0,0.8);
+                box-shadow: 0 4px 15px rgba(0,0,0,0.8); max-width: 280px; word-break: break-word;
             }
             .tw-list-item {
                 background: #23201c; padding: 8px 10px; margin-bottom: 6px;
@@ -404,7 +403,7 @@
             .tw-legend-item:last-child { margin-bottom: 0; }
             .tw-legend-color { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
             .tw-route-path, .tw-route-arrow { transition: opacity 0.15s ease, stroke-width 0.15s ease; }
-            
+
             #tw-add-custom-btn {
                 position: absolute; top: 12px; left: 12px; z-index: 10000;
                 background: #165eb9; color: #fff; border: 1px solid var(--tw-paper-brown);
@@ -432,10 +431,112 @@
                 font-size: 13px; font-weight: bold; padding: 0 4px;
             }
             .tw-del-btn:hover { color: #ff0000; }
+
+            /* --- Mobile View Adjustments --- */
+            @media (max-width: 768px) {
+                .tw-modal {
+                    width: 95vw;
+                    height: 90vh;
+                }
+                .tw-body {
+                    flex-direction: column;
+                }
+                .tw-sidebar {
+                    width: 100% !important;
+                    height: 100% !important;
+                    border-right: none !important;
+                    border-bottom: none !important;
+                }
+                .tw-canvas-container {
+                    display: none !important;
+                }
+            }
         `;
         const style = document.createElement('style');
         style.textContent = css;
         document.head.appendChild(style);
+    }
+
+    // --- Smart Tooltip Renderer (Adapts to Screen Boundaries) ---
+    function showTooltip(html, e) {
+        const tooltip = document.getElementById('tw-tooltip');
+        if (!tooltip) return;
+
+        tooltip.innerHTML = html;
+        tooltip.style.display = 'block';
+
+        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : window.innerWidth / 2);
+        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : window.innerHeight / 2);
+
+        const ttWidth = tooltip.offsetWidth;
+        const ttHeight = tooltip.offsetHeight;
+        const winWidth = window.innerWidth;
+        const winHeight = window.innerHeight;
+
+        let left = clientX + 15;
+        let top = clientY + 15;
+
+        // Render above cursor if overflowing screen bottom
+        if (top + ttHeight > winHeight - 10) {
+            top = clientY - ttHeight - 15;
+        }
+
+        // Render to left of cursor if overflowing screen right
+        if (left + ttWidth > winWidth - 10) {
+            left = clientX - ttWidth - 15;
+        }
+
+        // Clamp values to stay within visible screen bounds
+        left = Math.max(10, Math.min(left, winWidth - ttWidth - 10));
+        top = Math.max(10, Math.min(top, winHeight - ttHeight - 10));
+
+        tooltip.style.left = left + 'px';
+        tooltip.style.top = top + 'px';
+    }
+
+    function deactivateTooltip() {
+        const tooltip = document.getElementById('tw-tooltip');
+        if (tooltip) tooltip.style.display = 'none';
+    }
+
+    // --- Interaction Handler for Desktop Hover vs Mobile 2-Tap Navigation ---
+    function handleInteractiveElement(el, itemId, navUrl, getTooltipContent, onActivate, onDeactivate) {
+        // Desktop Hover
+        el.onmousemove = (e) => {
+            if (window.innerWidth > 768) {
+                if (onActivate) onActivate();
+                showTooltip(getTooltipContent(), e);
+            }
+        };
+
+        el.onmouseleave = () => {
+            if (window.innerWidth > 768) {
+                if (onDeactivate) onDeactivate();
+                deactivateTooltip();
+            }
+        };
+
+        // Click / Touch interaction
+        el.onclick = (e) => {
+            const isMobile = window.innerWidth <= 768;
+            if (isMobile) {
+                if (activeMobileItemId !== itemId) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    activeMobileItemId = itemId;
+                    if (onActivate) onActivate();
+                    showTooltip(getTooltipContent(), e);
+                    return;
+                }
+            }
+
+            activeMobileItemId = null;
+            deactivateTooltip();
+
+            if (navUrl) {
+                window.location.href = navUrl;
+            }
+        };
     }
 
     function createUI() {
@@ -498,6 +599,14 @@
             </div>
         `;
         document.body.appendChild(overlay);
+
+        // Clear active tooltip when tapping outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.tw-list-item') && !e.target.closest('g') && !e.target.closest('#tw-tooltip')) {
+                activeMobileItemId = null;
+                deactivateTooltip();
+            }
+        });
 
         document.getElementById('tw-close-modal').onclick = () => { overlay.style.display = 'none'; };
 
@@ -629,13 +738,56 @@
         return `${icon} ${name}: <strong>${total.toLocaleString()}/h</strong>${routeDetails}`;
     }
 
+    function getVillageTooltipHtml(v) {
+        let incWood = 0, incClay = 0, incIron = 0, incCrop = 0;
+        let outWood = 0, outClay = 0, outIron = 0, outCrop = 0;
+
+        state.routes.forEach(r => {
+            if (r.toX === v.x && r.toY === v.y) {
+                incWood += (r.wood || 0);
+                incClay += (r.clay || 0);
+                incIron += (r.iron || 0);
+                incCrop += (r.crop || 0);
+            }
+            if (r.fromX === v.x && r.fromY === v.y) {
+                outWood += (r.wood || 0);
+                outClay += (r.clay || 0);
+                outIron += (r.iron || 0);
+                outCrop += (r.crop || 0);
+            }
+        });
+
+        return `
+            <strong style="color:#fff">${v.name} (${v.x}|${v.y})</strong><br/>
+            ${formatResourceTooltipLine('🌲', 'Lumber', v.wood || 0, incWood, outWood)}<br/>
+            ${formatResourceTooltipLine('🧱', 'Stone', v.clay || 0, incClay, outClay)}<br/>
+            ${formatResourceTooltipLine('⛏️', 'Metal', v.iron || 0, incIron, outIron)}<br/>
+            ${formatResourceTooltipLine('🥩', 'Meat', v.crop || 0, incCrop, outCrop)}
+            ${window.innerWidth <= 768 ? '<br/><span style="font-size:10px; color:#ffc107;">Tap again to navigate</span>' : ''}
+        `;
+    }
+
+    function getRouteTooltipHtml(r) {
+        const fromName = getVillageName(r.fromX, r.fromY);
+        const toName = r.destName || getVillageName(r.toX, r.toY);
+
+        return `
+            <strong style="color:var(--tw-paper-light)">Trade Route Details</strong><br/>
+            From: <strong>${fromName}</strong> (${r.fromX}|${r.fromY})<br/>
+            To: <strong>${toName}</strong> (${r.toX}|${r.toY})<br/>
+            🌲 Lumber: +${(r.wood || 0).toLocaleString()}/h<br/>
+            🧱 Stone: +${(r.clay || 0).toLocaleString()}/h<br/>
+            ⛏️ Metal: +${(r.iron || 0).toLocaleString()}/h<br/>
+            🥩 Meat: +${(r.crop || 0).toLocaleString()}/h
+        `;
+    }
+
     // --- Render SVG Graph ---
     function render() {
         const villages = Object.values(state.villages);
         const routes = state.routes;
         const customItems = state.customItems || [];
         const svg = document.getElementById('tw-svg');
-        const tooltip = document.getElementById('tw-tooltip');
         const container = document.getElementById('tw-canvas-container');
         const sidebarList = document.getElementById('tw-village-list');
 
@@ -679,76 +831,21 @@
 
         const routeDomMap = new Map();
 
-        // Helper: Activate route highlight & tooltip
-        function activateRouteHighlight(r, path, arrow, mouseEvent) {
+        function activateRouteHighlight(path, arrow) {
             routesGroupElement.querySelectorAll('.tw-route-path, .tw-route-arrow').forEach(p => p.style.opacity = '0.25');
             path.style.opacity = '1';
             arrow.style.opacity = '1';
             path.setAttribute('stroke-width', '5');
             routesGroupElement.appendChild(path);
             routesGroupElement.appendChild(arrow);
-
-            const fromName = getVillageName(r.fromX, r.fromY);
-            const toName = r.destName || getVillageName(r.toX, r.toY);
-
-            tooltip.style.display = 'block';
-            tooltip.style.left = (mouseEvent.clientX + 15) + 'px';
-            tooltip.style.top = (mouseEvent.clientY + 15) + 'px';
-            tooltip.innerHTML = `
-                <strong style="color:var(--tw-paper-light)">Trade Route Details</strong><br/>
-                From: <strong>${fromName}</strong> (${r.fromX}|${r.fromY})<br/>
-                To: <strong>${toName}</strong> (${r.toX}|${r.toY})<br/>
-                🌲 Lumber: +${(r.wood || 0).toLocaleString()}/h<br/>
-                🧱 Stone: +${(r.clay || 0).toLocaleString()}/h<br/>
-                ⛏️ Metal: +${(r.iron || 0).toLocaleString()}/h<br/>
-                🥩 Meat: +${(r.crop || 0).toLocaleString()}/h
-            `;
         }
 
-        // Helper: Reset route highlight & hide tooltip
         function deactivateRouteHighlight() {
             routesGroupElement.querySelectorAll('.tw-route-path, .tw-route-arrow').forEach(p => {
                 p.style.opacity = '1';
                 p.setAttribute('stroke-width', '3');
             });
-            tooltip.style.display = 'none';
-        }
-
-        // Helper: Activate village highlight & tooltip
-        function activateVillageHighlight(v, mouseEvent) {
-            let incWood = 0, incClay = 0, incIron = 0, incCrop = 0;
-            let outWood = 0, outClay = 0, outIron = 0, outCrop = 0;
-
-            routes.forEach(r => {
-                if (r.toX === v.x && r.toY === v.y) {
-                    incWood += (r.wood || 0);
-                    incClay += (r.clay || 0);
-                    incIron += (r.iron || 0);
-                    incCrop += (r.crop || 0);
-                }
-                if (r.fromX === v.x && r.fromY === v.y) {
-                    outWood += (r.wood || 0);
-                    outClay += (r.clay || 0);
-                    outIron += (r.iron || 0);
-                    outCrop += (r.crop || 0);
-                }
-            });
-
-            tooltip.style.display = 'block';
-            tooltip.style.left = (mouseEvent.clientX + 15) + 'px';
-            tooltip.style.top = (mouseEvent.clientY + 15) + 'px';
-            tooltip.innerHTML = `
-                <strong style="color:#fff">${v.name} (${v.x}|${v.y})</strong><br/>
-                ${formatResourceTooltipLine('🌲', 'Lumber', v.wood || 0, incWood, outWood)}<br/>
-                ${formatResourceTooltipLine('🧱', 'Stone', v.clay || 0, incClay, outClay)}<br/>
-                ${formatResourceTooltipLine('⛏️', 'Metal', v.iron || 0, incIron, outIron)}<br/>
-                ${formatResourceTooltipLine('🥩', 'Meat', v.crop || 0, incCrop, outCrop)}<br/>
-            `;
-        }
-
-        // Helper: Reset village highlight & hide tooltip
-        function deactivateVillageHighlight() {
-            tooltip.style.display = 'none';
+            deactivateTooltip();
         }
 
         // --- Render Trade Routes on SVG ---
@@ -796,7 +893,10 @@
             arrow.setAttribute('class', 'tw-route-arrow');
             arrow.style.pointerEvents = 'none';
 
-            path.onmousemove = (e) => activateRouteHighlight(r, path, arrow, e);
+            path.onmousemove = (e) => {
+                activateRouteHighlight(path, arrow);
+                showTooltip(getRouteTooltipHtml(r), e);
+            };
             path.onmouseleave = () => deactivateRouteHighlight();
 
             routesGroupElement.appendChild(path);
@@ -829,13 +929,17 @@
 
             g.appendChild(circle); g.appendChild(text);
 
-            g.onclick = (e) => {
-                e.stopPropagation();
-                window.location.href = `/map/tile/${v.x}/${v.y}?center=true`;
-            };
+            const vId = `node_v_${v.x}_${v.y}`;
+            const navUrl = `/map/tile/${v.x}/${v.y}?center=true`;
 
-            g.onmousemove = (e) => activateVillageHighlight(v, e);
-            g.onmouseleave = () => deactivateVillageHighlight();
+            handleInteractiveElement(
+                g,
+                vId,
+                navUrl,
+                () => getVillageTooltipHtml(v),
+                null,
+                deactivateTooltip
+            );
 
             nodesGroupElement.appendChild(g);
         });
@@ -862,29 +966,30 @@
 
             g.appendChild(circle); g.appendChild(text);
 
-            g.onclick = (e) => {
-                e.stopPropagation();
-                window.location.href = `/map/tile/${c.x}/${c.y}?center=true`;
-            };
+            const cId = `node_c_${c.id}`;
+            const navUrl = `/map/tile/${c.x}/${c.y}?center=true`;
+            const getHtml = () => `
+                <strong style="color:${c.color}">${c.title} (${c.x}|${c.y})</strong><br/>
+                ${c.note ? `<span style="color:#ddd;">${c.note}</span><br/>` : ''}
+                <hr style="border:0; border-top:1px solid #332e28; margin: 4px 0;"/>
+                <span style="font-size:10px; color:#aaa;">Click / tap again to view tile map</span>
+            `;
 
-            g.onmousemove = (e) => {
-                tooltip.style.display = 'block';
-                tooltip.style.left = (e.clientX + 15) + 'px';
-                tooltip.style.top = (e.clientY + 15) + 'px';
-                tooltip.innerHTML = `
-                    <strong style="color:${c.color}">${c.title} (${c.x}|${c.y})</strong><br/>
-                    ${c.note ? `<span style="color:#ddd;">${c.note}</span><br/>` : ''}
-                    <hr style="border:0; border-top:1px solid #332e28; margin: 4px 0;"/>
-                    <span style="font-size:10px; color:#aaa;">Click to view tile map</span>
-                `;
-            };
-            g.onmouseleave = () => tooltip.style.display = 'none';
+            handleInteractiveElement(
+                g,
+                cId,
+                navUrl,
+                getHtml,
+                null,
+                deactivateTooltip
+            );
+
             nodesGroupElement.appendChild(g);
         });
 
         // --- Render Sorted Sidebar Content ---
 
-        // 1. Sidebar: Sorted Villages (Linked Hover Tooltip)
+        // 1. Sidebar: Sorted Villages
         const sortedVillages = [...villages].sort((a, b) =>
             (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
         );
@@ -899,11 +1004,19 @@
             div.className = 'tw-list-item';
             div.style.cursor = 'pointer';
             div.innerHTML = `<span>🏡 ${v.name} (${v.x}|${v.y})</span>`;
-            div.onclick = () => {
-                window.location.href = `/map/tile/${v.x}/${v.y}?center=true`;
-            };
-            div.onmousemove = (e) => activateVillageHighlight(v, e);
-            div.onmouseleave = () => deactivateVillageHighlight();
+
+            const sidebarVId = `sidebar_v_${v.x}_${v.y}`;
+            const navUrl = `/map/tile/${v.x}/${v.y}?center=true`;
+
+            handleInteractiveElement(
+                div,
+                sidebarVId,
+                navUrl,
+                () => getVillageTooltipHtml(v),
+                null,
+                deactivateTooltip
+            );
+
             sidebarList.appendChild(div);
         });
 
@@ -922,13 +1035,28 @@
                 const div = document.createElement('div');
                 div.className = 'tw-list-item';
                 div.innerHTML = `
-                    <span style="color:${c.color}; font-weight:bold; cursor:pointer;">${c.title} (${c.x}|${c.y})</span>
+                    <span class="tw-marker-title" style="color:${c.color}; font-weight:bold; cursor:pointer;">${c.title} (${c.x}|${c.y})</span>
                     <button class="tw-del-btn" title="Delete Marker">✖</button>
                 `;
 
-                div.querySelector('span').onclick = () => {
-                    window.location.href = `/map/tile/${c.x}/${c.y}?center=true`;
-                };
+                const titleSpan = div.querySelector('.tw-marker-title');
+                const sidebarCId = `sidebar_c_${c.id}`;
+                const navUrl = `/map/tile/${c.x}/${c.y}?center=true`;
+                const getHtml = () => `
+                    <strong style="color:${c.color}">${c.title} (${c.x}|${c.y})</strong><br/>
+                    ${c.note ? `<span style="color:#ddd;">${c.note}</span><br/>` : ''}
+                    <hr style="border:0; border-top:1px solid #332e28; margin: 4px 0;"/>
+                    <span style="font-size:10px; color:#aaa;">Click / tap again to view tile map</span>
+                `;
+
+                handleInteractiveElement(
+                    titleSpan,
+                    sidebarCId,
+                    navUrl,
+                    getHtml,
+                    null,
+                    deactivateTooltip
+                );
 
                 const delBtn = div.querySelector('.tw-del-btn');
                 delBtn.onclick = (e) => {
@@ -963,10 +1091,16 @@
                 div.innerHTML = `<span>🛤️ ${fromName} → ${toName}</span>`;
 
                 const domRef = routeDomMap.get(r.id);
-                if (domRef) {
-                    div.onmousemove = (e) => activateRouteHighlight(domRef.route, domRef.path, domRef.arrow, e);
-                    div.onmouseleave = () => deactivateRouteHighlight();
-                }
+                const sidebarRId = `sidebar_r_${r.id}`;
+
+                handleInteractiveElement(
+                    div,
+                    sidebarRId,
+                    null,
+                    () => getRouteTooltipHtml(r),
+                    () => { if (domRef) activateRouteHighlight(domRef.path, domRef.arrow); },
+                    deactivateRouteHighlight
+                );
 
                 sidebarList.appendChild(div);
             });
