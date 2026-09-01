@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Safe Time Tracker
 // @namespace    http://tampermonkey.net/
-// @version      7.4
+// @version      7.5
 // @description  Track and deduce target players' Safe Times from Rally Point troop arrival blocks
 // @author       You
 // @match        *://*.thronewake.com/*
@@ -13,6 +13,8 @@
 
 (function () {
     'use strict';
+
+    const SCRIPT_VERSION = '7.5';
 
     // --- Storage Keys ---
     const STORAGE_PLAYER_DATA = 'st_player_data';
@@ -604,6 +606,7 @@
     let lastPushTime = 0;
     let pushTimeout = null;
     let syncCountdownTimer = null;
+    let nextPushCountdownSec = 0;
     let isPushing = false;
     let hasPendingPush = false;
     const MIN_PUSH_INTERVAL_MS = 10000;
@@ -614,20 +617,15 @@
         if (!el) return;
 
         if (status === 'connected') {
-            el.className = 'st-badge st-badge-connected';
-            el.textContent = 'Connected';
+            el.innerHTML = '<span class="st-badge st-badge-connected">Connected</span>';
         } else if (status === 'queued') {
-            el.className = 'st-badge st-badge-syncing';
-            el.textContent = `Sync in ${countdownSec}s`;
+            el.innerHTML = `<span class="st-badge st-badge-connected">Connected</span><span class="st-badge st-badge-syncing">Push in ${countdownSec}s</span>`;
         } else if (status === 'syncing') {
-            el.className = 'st-badge st-badge-syncing';
-            el.textContent = 'Syncing...';
+            el.innerHTML = '<span class="st-badge st-badge-syncing">Syncing...</span>';
         } else if (status === 'error') {
-            el.className = 'st-badge st-badge-error';
-            el.textContent = `${message || 'Sync Error'}`;
+            el.innerHTML = `<span class="st-badge st-badge-error">${message || 'Sync Error'}</span>`;
         } else {
-            el.className = 'st-badge st-badge-disconnected';
-            el.textContent = 'Disconnected';
+            el.innerHTML = '<span class="st-badge st-badge-disconnected">Disconnected</span>';
         }
     }
 
@@ -674,7 +672,7 @@
                         const file = data.files['thronewake_safetime.json'] || data.files['embermark_safetime.json'];
                         if (file && file.content) {
                             const parsed = JSON.parse(file.content);
-
+                            
                             const tz = parsed.tz || parsed.timeZoneMode;
                             if (tz) { timeZoneMode = tz; GM_setValue(STORAGE_TZ_MODE, timeZoneMode); }
 
@@ -796,16 +794,16 @@
             executePush();
         } else {
             const delay = Math.max(1000, MIN_PUSH_INTERVAL_MS - elapsed);
-            let remainingSec = Math.ceil(delay / 1000);
+            nextPushCountdownSec = Math.ceil(delay / 1000);
 
-            updateGistIndicator('queued', '', remainingSec);
+            updateGistIndicator('queued', '', nextPushCountdownSec);
             syncCountdownTimer = setInterval(() => {
-                remainingSec--;
-                if (remainingSec <= 0) {
+                nextPushCountdownSec--;
+                if (nextPushCountdownSec <= 0) {
                     clearInterval(syncCountdownTimer);
                     syncCountdownTimer = null;
                 } else {
-                    updateGistIndicator('queued', '', remainingSec);
+                    updateGistIndicator('queued', '', nextPushCountdownSec);
                 }
             }, 1000);
 
@@ -874,7 +872,6 @@
                 const sStart = (base + x + 1440) % 1440;
                 let has_conflict = false;
 
-                // Validate if candidate start time sStart causes candidate Safe Time [sStart, bEnd] to cover any unblocked sample
                 for (const a of validAvail) {
                     if (isBetweenArc(a, sStart, bEnd)) {
                         has_conflict = true;
@@ -1330,8 +1327,8 @@
                 <!-- Header -->
                 <div class="st-header-row" id="st-header-drag-handle">
                     <div style="display: flex; align-items: center; gap: 8px;">
-                        <h3 class="st-header-title">Safe Time Tracker</h3>
-                        <span id="st-gist-indicator"></span>
+                        <h3 class="st-header-title">Safe Time Tracker v${SCRIPT_VERSION}</h3>
+                        <span id="st-gist-indicator" style="display: inline-flex; align-items: center; gap: 6px;"></span>
                     </div>
                     <button id="st-btn-close-modal" type="button" class="st-close-btn">✕</button>
                 </div>
@@ -1393,7 +1390,7 @@
         attachModalDraggable(modalBox, dragHandle);
 
         modalElement.querySelector('#st-btn-close-modal').addEventListener('click', toggleModal);
-        updateGistIndicator(gistStatus);
+        updateGistIndicator(gistStatus, '', nextPushCountdownSec);
 
         const detailsElem = modalElement.querySelector('#st-settings-details');
         detailsElem.addEventListener('toggle', () => {
