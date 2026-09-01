@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Thronewake Safe Time Tracker
 // @namespace    http://tampermonkey.net/
-// @version      6.5
+// @version      7.4
 // @description  Track and deduce target players' Safe Times from Rally Point troop arrival blocks
 // @author       You
 // @match        *://*.thronewake.com/*
@@ -85,6 +85,11 @@
 
         const bStart = valid[(gapStartIndex + 1) % n];
         const bEnd = valid[gapStartIndex];
+        const spanLen = (bEnd - bStart + 1440) % 1440;
+
+        if (spanLen > 360) {
+            return valid.includes(m);
+        }
 
         if (bStart <= bEnd) {
             return m >= bStart && m <= bEnd;
@@ -539,6 +544,12 @@
             font-weight: normal;
         }
 
+        .st-assumed-box {
+            background: #fef3c7 !important;
+            border: 1px dashed #b45309 !important;
+            color: #78350f !important;
+        }
+
         .st-empty {
             color: #6a5a48;
             font-style: italic;
@@ -592,11 +603,12 @@
     // --- Gist Sync Logic & Throttling ---
     let lastPushTime = 0;
     let pushTimeout = null;
+    let syncCountdownTimer = null;
     let isPushing = false;
     let hasPendingPush = false;
     const MIN_PUSH_INTERVAL_MS = 10000;
 
-    function updateGistIndicator(status, message = '') {
+    function updateGistIndicator(status, message = '', countdownSec = 0) {
         gistStatus = status;
         const el = document.getElementById('st-gist-indicator');
         if (!el) return;
@@ -604,6 +616,9 @@
         if (status === 'connected') {
             el.className = 'st-badge st-badge-connected';
             el.textContent = 'Connected';
+        } else if (status === 'queued') {
+            el.className = 'st-badge st-badge-syncing';
+            el.textContent = `Sync in ${countdownSec}s`;
         } else if (status === 'syncing') {
             el.className = 'st-badge st-badge-syncing';
             el.textContent = 'Syncing...';
@@ -669,7 +684,17 @@
                             }
 
                             if (rawPlayers) {
-                                playerData = normalizePlayerData(rawPlayers);
+                                const incomingData = normalizePlayerData(rawPlayers);
+                                for (const p in incomingData) {
+                                    if (!playerData[p]) {
+                                        playerData[p] = incomingData[p];
+                                    } else {
+                                        if (incomingData[p].alliance) playerData[p].alliance = incomingData[p].alliance;
+                                        playerData[p].samples = Array.from(new Set([...playerData[p].samples, ...incomingData[p].samples])).sort((a, b) => a - b);
+                                        playerData[p].availableSamples = Array.from(new Set([...playerData[p].availableSamples, ...incomingData[p].availableSamples])).sort((a, b) => a - b);
+                                        playerData[p].availableSamples = playerData[p].availableSamples.filter(m => !isSampleInBlockedSpan(m, playerData[p].samples));
+                                    }
+                                }
                                 GM_setValue(STORAGE_PLAYER_DATA, playerData);
                             }
 
@@ -712,11 +737,19 @@
             clearTimeout(pushTimeout);
             pushTimeout = null;
         }
+        if (syncCountdownTimer) {
+            clearInterval(syncCountdownTimer);
+            syncCountdownTimer = null;
+        }
 
         const now = Date.now();
         const elapsed = now - lastPushTime;
 
         const executePush = () => {
+            if (syncCountdownTimer) {
+                clearInterval(syncCountdownTimer);
+                syncCountdownTimer = null;
+            }
             if (isPushing) {
                 hasPendingPush = true;
                 return;
@@ -763,6 +796,19 @@
             executePush();
         } else {
             const delay = Math.max(1000, MIN_PUSH_INTERVAL_MS - elapsed);
+            let remainingSec = Math.ceil(delay / 1000);
+
+            updateGistIndicator('queued', '', remainingSec);
+            syncCountdownTimer = setInterval(() => {
+                remainingSec--;
+                if (remainingSec <= 0) {
+                    clearInterval(syncCountdownTimer);
+                    syncCountdownTimer = null;
+                } else {
+                    updateGistIndicator('queued', '', remainingSec);
+                }
+            }, 1000);
+
             pushTimeout = setTimeout(() => {
                 if (hasPendingPush && !isPushing) {
                     executePush();
@@ -776,86 +822,121 @@
     // --- Math & Safe Time Deduction ---
     function calculateSpannedInterval(utcMinsList, availableUtcMinsList = []) {
         const validBlocked = (Array.isArray(utcMinsList) ? utcMinsList : []).filter(m => typeof m === 'number' && !isNaN(m) && m >= 0);
-        if (validBlocked.length === 0) return 'No blocked data';
-
-        const uniqueBlocked = Array.from(new Set(validBlocked)).sort((a, b) => a - b);
-        const n = uniqueBlocked.length;
-
-        let bStart, bEnd;
-        if (n === 1) {
-            bStart = uniqueBlocked[0];
-            bEnd = uniqueBlocked[0];
-        } else {
-            let maxGap = -1;
-            let gapStartIndex = -1;
-
-            for (let i = 0; i < n; i++) {
-                const current = uniqueBlocked[i];
-                const next = (i === n - 1) ? uniqueBlocked[0] + 1440 : uniqueBlocked[i + 1];
-                const gap = next - current;
-
-                if (gap > maxGap) {
-                    maxGap = gap;
-                    gapStartIndex = i;
-                }
-            }
-
-            bStart = uniqueBlocked[(gapStartIndex + 1) % n];
-            bEnd = uniqueBlocked[gapStartIndex];
-        }
-
-        const span_len = (bEnd - bStart + 1440) % 1440;
-        if (span_len > 360) {
-            return `${utcMinsToDisplay(bStart)} - ${utcMinsToDisplay(bEnd)} | Conflict (>6h)`;
-        }
-
-        const base = (bEnd - 360 + 1440) % 1440;
-        const max_x = (bStart - base + 1440) % 1440;
-
         const validAvail = (Array.isArray(availableUtcMinsList) ? availableUtcMinsList : [])
             .filter(m => typeof m === 'number' && !isNaN(m) && m >= 0)
-            .filter(m => !uniqueBlocked.includes(m));
+            .filter(m => !validBlocked.includes(m));
 
-        const possible_x = [];
+        // CONDITION 3: Do NOT assume if we know a safe time at least a bit (at least 1 blocked sample)
+        if (validBlocked.length > 0) {
+            const uniqueBlocked = Array.from(new Set(validBlocked)).sort((a, b) => a - b);
+            const n = uniqueBlocked.length;
 
-        for (let x = 0; x <= max_x; x++) {
-            const sStart = (base + x + 1440) % 1440;
-            let has_conflict = false;
+            let bStart, bEnd;
+            if (n === 1) {
+                bStart = uniqueBlocked[0];
+                bEnd = uniqueBlocked[0];
+            } else {
+                let maxGap = -1;
+                let gapStartIndex = -1;
 
-            for (const a of validAvail) {
-                const diff = (a - sStart + 1440) % 1440;
-                if (diff < 360) {
-                    has_conflict = true;
-                    break;
+                for (let i = 0; i < n; i++) {
+                    const current = uniqueBlocked[i];
+                    const next = (i === n - 1) ? uniqueBlocked[0] + 1440 : uniqueBlocked[i + 1];
+                    const gap = next - current;
+
+                    if (gap > maxGap) {
+                        maxGap = gap;
+                        gapStartIndex = i;
+                    }
+                }
+
+                bStart = uniqueBlocked[(gapStartIndex + 1) % n];
+                bEnd = uniqueBlocked[gapStartIndex];
+            }
+
+            const span_len = (bEnd - bStart + 1440) % 1440;
+            if (span_len > 360) {
+                return { text: `${utcMinsToDisplay(bStart)} - ${utcMinsToDisplay(bEnd)} | Conflict (>6h)`, isAssumed: false };
+            }
+
+            const base = (bEnd - 360 + 1440) % 1440;
+            const max_x = (bStart - base + 1440) % 1440;
+
+            const possible_x = [];
+
+            const isBetweenArc = (m, start, end) => {
+                if (start === end) return m === start;
+                if (start < end) return m >= start && m <= end;
+                return m >= start || m <= end;
+            };
+
+            for (let x = 0; x <= max_x; x++) {
+                const sStart = (base + x + 1440) % 1440;
+                let has_conflict = false;
+
+                // Validate if candidate start time sStart causes candidate Safe Time [sStart, bEnd] to cover any unblocked sample
+                for (const a of validAvail) {
+                    if (isBetweenArc(a, sStart, bEnd)) {
+                        has_conflict = true;
+                        break;
+                    }
+                }
+                if (!has_conflict) {
+                    possible_x.push(x);
                 }
             }
-            if (!has_conflict) {
-                possible_x.push(x);
-            }
-        }
 
-        if (possible_x.length === 0) {
+            if (possible_x.length === 0) {
+                if (n === 1) {
+                    return { text: `Sample: ${utcMinsToDisplay(bStart)} | Conflict`, isAssumed: false };
+                }
+                return { text: `${utcMinsToDisplay(bStart)} - ${utcMinsToDisplay(bEnd)} | Conflict`, isAssumed: false };
+            }
+
+            const min_x = possible_x[0];
+            const final_max_x = possible_x[possible_x.length - 1];
+
+            const earliestStart = (base + min_x + 1440) % 1440;
+            const latestStart = (base + final_max_x + 1440) % 1440;
+            const latestEnd = (latestStart + 360) % 1440;
+
             if (n === 1) {
-                return `Sample: ${utcMinsToDisplay(bStart)} | Conflict`;
+                return { text: `Sample: ${utcMinsToDisplay(bStart)} (Bounds: ${utcMinsToDisplay(earliestStart)} to ${utcMinsToDisplay(latestEnd)})`, isAssumed: false };
             }
-            return `${utcMinsToDisplay(bStart)} - ${utcMinsToDisplay(bEnd)} | Conflict`;
+
+            return { text: `${utcMinsToDisplay(bStart)} - ${utcMinsToDisplay(bEnd)} | Bounds: ${utcMinsToDisplay(earliestStart)} to ${utcMinsToDisplay(latestEnd)}`, isAssumed: false };
         }
 
-        const min_x = possible_x[0];
-        const final_max_x = possible_x[possible_x.length - 1];
+        // CONDITION 1 & 2: NO blocked samples yet, attempt prediction from unblocked samples
+        const sortedAvail = Array.from(new Set(validAvail)).sort((a, b) => a - b);
+        if (sortedAvail.length >= 2) {
+            const nAvail = sortedAvail.length;
+            const candidate_gaps = [];
 
-        const earliestStart = (base + min_x + 1440) % 1440;
-        const latestStart = (base + final_max_x + 1440) % 1440;
-        const latestEnd = (latestStart + 360) % 1440;
+            for (let i = 0; i < nAvail; i++) {
+                const s = sortedAvail[i];
+                const e = sortedAvail[(i + 1) % nAvail];
+                let gap_len = (e - s + 1440) % 1440;
+                if (gap_len === 0) gap_len = 1440;
 
-        if (n === 1) {
-            return `Sample: ${utcMinsToDisplay(bStart)} (Bounds: ${utcMinsToDisplay(earliestStart)} to ${utcMinsToDisplay(latestEnd)})`;
+                if (gap_len >= 180) { // Require at least 3 hours (180 minutes) gap
+                    candidate_gaps.push({ start: s, end: e, len: gap_len });
+                }
+            }
+
+            if (candidate_gaps.length > 0) {
+                candidate_gaps.sort((a, b) => b.len - a.len);
+                const topGaps = candidate_gaps.slice(0, 3);
+
+                const formatted = topGaps.map(g => `${utcMinsToDisplay(g.start)} - ${utcMinsToDisplay(g.end)}`).join(', ');
+                return { text: `Assumed: ${formatted}`, isAssumed: true };
+            }
         }
 
-        return `${utcMinsToDisplay(bStart)} - ${utcMinsToDisplay(bEnd)} | Bounds: ${utcMinsToDisplay(earliestStart)} to ${utcMinsToDisplay(latestEnd)}`;
+        return { text: 'No blocked data', isAssumed: false };
     }
 
-    function groupSamplesIntoIntervals(utcMinsList, cssClass = 'st-sample-tag', gapThreshold = 30, oppositeUtcMinsList = [], isAvailable = false) {
+    function groupSamplesIntoIntervals(utcMinsList, cssClass = 'st-sample-tag', gapThreshold = 60, oppositeUtcMinsList = [], isAvailable = false) {
         const validSamples = (Array.isArray(utcMinsList) ? utcMinsList : []).filter(m => typeof m === 'number' && !isNaN(m) && m >= 0);
         if (validSamples.length === 0) return [];
 
@@ -895,12 +976,12 @@
             let shouldMerge = false;
             if (isAvailable) {
                 if (hasValidSafeTime) {
-                    shouldMerge = !hasOppositeBetween;
+                    shouldMerge = (gap <= gapThreshold) && !hasOppositeBetween;
                 } else {
                     shouldMerge = (gap <= gapThreshold) && !hasOppositeBetween;
                 }
             } else {
-                shouldMerge = (gap <= 240) || (gap <= gapThreshold && !hasOppositeBetween);
+                shouldMerge = (gap <= gapThreshold) && !hasOppositeBetween;
             }
 
             if (shouldMerge) {
@@ -922,12 +1003,12 @@
             let shouldMergeWrap = false;
             if (isAvailable) {
                 if (hasValidSafeTime) {
-                    shouldMergeWrap = !hasOppositeInMidnight;
+                    shouldMergeWrap = (midnightGap <= gapThreshold) && !hasOppositeInMidnight;
                 } else {
                     shouldMergeWrap = (midnightGap <= gapThreshold) && !hasOppositeInMidnight;
                 }
             } else {
-                shouldMergeWrap = (midnightGap <= 240) || (midnightGap <= gapThreshold && !hasOppositeInMidnight);
+                shouldMergeWrap = (midnightGap <= gapThreshold) && !hasOppositeInMidnight;
             }
 
             if (shouldMergeWrap) {
@@ -970,6 +1051,13 @@
         const sendTroopsPanel = document.getElementById('send-troops-panel');
         if (!sendTroopsPanel) return;
 
+        // Attach live input/change event listeners to catch immediate typing changes
+        if (!sendTroopsPanel.dataset.stListenersAttached) {
+            sendTroopsPanel.dataset.stListenersAttached = 'true';
+            sendTroopsPanel.addEventListener('input', () => scanRallyPoint());
+            sendTroopsPanel.addEventListener('change', () => scanRallyPoint());
+        }
+
         const playerAnchor = sendTroopsPanel.querySelector('a[href*="/player/"]');
         if (!playerAnchor) return;
 
@@ -997,9 +1085,11 @@
         const utcMins = (timeZoneMode === 'utc') ? parsedMins : localMinsToUtc(parsedMins);
         if (utcMins < 0) return;
 
-        const warning = Array.from(sendTroopsPanel.querySelectorAll('p')).find(p =>
-            p.textContent.includes('Safe Time blocks this mission')
-        );
+        // Strict disambiguation: Only trigger blocked state if target player's Safe Time blocks the mission
+        const warning = Array.from(sendTroopsPanel.querySelectorAll('p')).find(p => {
+            const text = p.textContent.toLowerCase();
+            return text.includes('blocks this mission') || (text.includes('safe time') && text.includes('blocks'));
+        });
 
         const isBlocked = !!warning;
         const currentKey = `${playerName}@${utcMins}@${isBlocked ? 'B' : 'A'}`;
@@ -1021,14 +1111,12 @@
                 samples.push(utcMins);
             }
 
-            // 1. Discard older blocked samples that cannot co-exist in a 6-hour window with the new scan
             samples = samples.filter(s => {
                 if (s === utcMins) return true;
                 const dist = Math.min((utcMins - s + 1440) % 1440, (s - utcMins + 1440) % 1440);
                 return dist <= 360;
             });
 
-            // Ensure remaining blocked samples fit in a single <= 360-minute window
             while (samples.length > 1) {
                 samples.sort((a, b) => a - b);
                 let maxGap = -1, gapIdx = 0;
@@ -1055,13 +1143,12 @@
 
             playerData[playerName].samples = samples;
 
-            // 2. Discard unblocked samples that fall inside the confirmed blocked span of the new blocked samples
             playerData[playerName].availableSamples = (playerData[playerName].availableSamples || []).filter(
                 m => !isSampleInBlockedSpan(m, samples)
             );
 
             GM_setValue(STORAGE_PLAYER_DATA, playerData);
-            pushToGist(true); // Immediate sync to discard invalid data from Gist
+            pushToGist(false);
             updateModalContent();
         } else {
             let avail = playerData[playerName].availableSamples || [];
@@ -1072,16 +1159,15 @@
 
             let samples = playerData[playerName].samples || [];
 
-            // 1. If utcMins falls inside the existing blocked span, it splits the safe time.
-            // Keep the larger part and discard the smaller range as invalid.
             if (samples.length > 0 && isSampleInBlockedSpan(utcMins, samples)) {
                 samples = splitSamplesOnUnblocked(samples, utcMins);
                 playerData[playerName].samples = samples;
             } else if (samples.length > 0) {
-                // 2. If utcMins creates a conflict outside the span, prune old blocked samples that contradict utcMins
+                samples.sort((a, b) => a - b);
                 while (samples.length > 0) {
                     const res = calculateSpannedInterval(samples, avail);
-                    if (!res.includes('Conflict')) break;
+                    const resText = typeof res === 'object' ? res.text : res;
+                    if (!resText.includes('Conflict')) break;
                     samples.shift();
                 }
                 playerData[playerName].samples = samples;
@@ -1091,7 +1177,7 @@
             playerData[playerName].availableSamples = avail.filter(m => !isSampleInBlockedSpan(m, playerData[playerName].samples));
 
             GM_setValue(STORAGE_PLAYER_DATA, playerData);
-            pushToGist(true); // Immediate sync to discard invalid data from Gist
+            pushToGist(false);
             updateModalContent();
         }
 
@@ -1413,9 +1499,13 @@
             const utcMinsList = playerEntry.samples || [];
             const availUtcMinsList = playerEntry.availableSamples || [];
 
-            const deducedInterval = calculateSpannedInterval(utcMinsList, availUtcMinsList);
-            const sampleIntervalsHtml = groupSamplesIntoIntervals(utcMinsList, 'st-sample-tag', 360, availUtcMinsList, false).join(' ');
-            const availIntervalsHtml = groupSamplesIntoIntervals(availUtcMinsList, 'st-avail-tag', 30, utcMinsList, true).join(' ');
+            const deducedRes = calculateSpannedInterval(utcMinsList, availUtcMinsList);
+            const deducedText = (typeof deducedRes === 'object' && deducedRes.text) ? deducedRes.text : String(deducedRes);
+            const isAssumed = typeof deducedRes === 'object' && !!deducedRes.isAssumed;
+            const deducedBoxClass = isAssumed ? 'st-deduced-box st-assumed-box' : 'st-deduced-box';
+
+            const sampleIntervalsHtml = groupSamplesIntoIntervals(utcMinsList, 'st-sample-tag', 60, availUtcMinsList, false).join(' ');
+            const availIntervalsHtml = groupSamplesIntoIntervals(availUtcMinsList, 'st-avail-tag', 60, utcMinsList, true).join(' ');
 
             const searchKey = `${name.toLowerCase()} ${cleanTag.toLowerCase()}`;
             const card = document.createElement('details');
@@ -1436,7 +1526,7 @@
                     <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                         ${playerLinkHtml}
                         ${allianceLinkHtml}
-                        <div class="st-deduced-box" style="margin: 0;">${deducedInterval}</div>
+                        <div class="${deducedBoxClass}" style="margin: 0;">${deducedText}</div>
                     </div>
                     <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
                         <button type="button" class="st-del-player st-btn-red" data-player="${name}" style="padding: 2px 6px; font-size: 10px;">Delete</button>
