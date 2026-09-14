@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Safe Time Tracker
 // @namespace    http://tampermonkey.net/
-// @version      8.5
-// @description  Track and deduce target players' Safe Times from Rally Point troop arrival blocks
+// @version      8.6
+// @description  Track and deduce target players' Safe Times from Rally Point troop arrival blocks with CPU optimizations.
 // @author       You
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
@@ -14,7 +14,7 @@
 (function () {
     'use strict';
 
-    const SCRIPT_VERSION = '8.5';
+    const SCRIPT_VERSION = '8.6';
 
     // --- Storage Keys ---
     const STORAGE_PLAYER_DATA = 'st_player_data';
@@ -981,7 +981,6 @@
                 const sEnd = (sStart + 360) % 1440;
                 let has_conflict = false;
 
-                // Candidate 6-hour Safe Time window [sStart, sEnd] must NOT contain any unblocked sample
                 for (const a of validAvail) {
                     if (isBetweenArc(a, sStart, sEnd)) {
                         has_conflict = true;
@@ -1079,16 +1078,7 @@
 
             const hasOppositeBetween = validOpposite.some(a => a > prev && a < curr);
 
-            let shouldMerge = false;
-            if (isAvailable) {
-                if (hasValidSafeTime) {
-                    shouldMerge = (gap <= gapThreshold) && !hasOppositeBetween;
-                } else {
-                    shouldMerge = (gap <= gapThreshold) && !hasOppositeBetween;
-                }
-            } else {
-                shouldMerge = (gap <= gapThreshold) && !hasOppositeBetween;
-            }
+            let shouldMerge = (gap <= gapThreshold) && !hasOppositeBetween;
 
             if (shouldMerge) {
                 prev = curr;
@@ -1106,16 +1096,7 @@
             const midnightGap = (1440 - last.end) + first.start;
             const hasOppositeInMidnight = validOpposite.some(a => a > last.end || a < first.start);
 
-            let shouldMergeWrap = false;
-            if (isAvailable) {
-                if (hasValidSafeTime) {
-                    shouldMergeWrap = (midnightGap <= gapThreshold) && !hasOppositeInMidnight;
-                } else {
-                    shouldMergeWrap = (midnightGap <= gapThreshold) && !hasOppositeInMidnight;
-                }
-            } else {
-                shouldMergeWrap = (midnightGap <= gapThreshold) && !hasOppositeInMidnight;
-            }
+            let shouldMergeWrap = (midnightGap <= gapThreshold) && !hasOppositeInMidnight;
 
             if (shouldMergeWrap) {
                 const merged = { start: last.start, end: first.end };
@@ -1149,8 +1130,6 @@
     const lastProcessedKeysByPlayer = {};
 
     function scanRallyPoint() {
-        mountHeaderMenu();
-
         const urlParams = new URLSearchParams(window.location.search);
         const isSendTroopsTab = urlParams.get('tab') === 'send-troops' || window.location.href.includes('tab=send-troops');
 
@@ -1247,29 +1226,28 @@
 
     // --- Header Menu Mount Logic ---
     function mountHeaderMenu() {
+        if (document.getElementById('st-header-tools-wrapper')) return;
+
         const header = document.querySelector('header');
         if (!header) return;
 
-        let toolsWrapper = document.getElementById('st-header-tools-wrapper');
-        const twGraphBtn = document.getElementById('tw-graph-btn');
+        const toolsWrapper = document.createElement('div');
+        toolsWrapper.id = 'st-header-tools-wrapper';
+        toolsWrapper.className = 'st-header-tools-wrapper';
 
-        if (!toolsWrapper) {
-            toolsWrapper = document.createElement('div');
-            toolsWrapper.id = 'st-header-tools-wrapper';
-            toolsWrapper.className = 'st-header-tools-wrapper';
+        const targetContainer = header.querySelector('.relative.flex.items-center.justify-center') ||
+                                header.querySelector('.relative.z-1.flex.justify-start') ||
+                                header.querySelector('.paper');
 
-            const targetContainer = header.querySelector('.relative.flex.items-center.justify-center') ||
-                                    header.querySelector('.relative.z-1.flex.justify-start') ||
-                                    header.querySelector('.paper');
-
-            if (targetContainer) {
-                targetContainer.appendChild(toolsWrapper);
-            } else {
-                header.appendChild(toolsWrapper);
-            }
+        if (targetContainer) {
+            targetContainer.appendChild(toolsWrapper);
+        } else {
+            header.appendChild(toolsWrapper);
         }
 
-        if (twGraphBtn && twGraphBtn.parentElement !== document.getElementById('st-dropdown-box')) {
+        const twGraphBtn = document.getElementById('tw-graph-btn');
+
+        if (twGraphBtn) {
             toolsWrapper.innerHTML = `
                 <button id="st-header-tools-btn" type="button" class="st-header-btn">
                     <span class="st-btn-desktop">Tools ▾</span>
@@ -1301,7 +1279,7 @@
             twGraphBtn.addEventListener('click', () => {
                 dropdownBox.classList.add('hidden');
             });
-        } else if (!twGraphBtn && !toolsWrapper.querySelector('#st-header-tools-btn')) {
+        } else {
             toolsWrapper.innerHTML = `
                 <button id="st-header-tools-btn" type="button" class="st-header-btn">
                     <span class="st-btn-desktop">Safe Times</span>
@@ -1709,6 +1687,10 @@
         });
     }
 
+    function getObserverTarget() {
+        return document.querySelector('main') || document.querySelector('#app') || document.querySelector('#content') || document.body;
+    }
+
     mountHeaderMenu();
 
     let scanTimeout = null;
@@ -1716,11 +1698,12 @@
         if (!scanTimeout) {
             scanTimeout = setTimeout(() => {
                 scanTimeout = null;
+                mountHeaderMenu();
                 scanRallyPoint();
             }, 300);
         }
     });
 
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(getObserverTarget(), { childList: true, subtree: true });
 
 })();
