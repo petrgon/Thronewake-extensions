@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake - Empire Defense Tracker
 // @namespace    violentmonkey-thronewake-troops
-// @version      9.1
-// @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown. Performance, position & selector optimized.
+// @version      9.4
+// @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown. Auto re-anchors layout on SPA navigation.
 // @author       petrgon
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
@@ -87,6 +87,11 @@
   let resetCopyTimeout = null;
   let lastParsedSig = "";
   let cachedRegistry = null;
+  let wasOnMapRoute = isMapRoute();
+
+  function isMapRoute() {
+    return window.location.pathname.startsWith('/map');
+  }
 
   function formatNum(num) {
     return num.toLocaleString('en-US');
@@ -119,7 +124,6 @@
     return { id: "global", name: "Global", totalVillages: 1 };
   }
 
-  // Targeted Left-Sidebar Finder (Excludes bottom panels)
   function getSideMenuContainer() {
     const srSpans = document.querySelectorAll('span.sr-only');
     for (const span of srSpans) {
@@ -151,6 +155,7 @@
   }
 
   function isUpkeepVisible() {
+    if (isMapRoute()) return false;
     const container = getSideMenuContainer();
     return !!(container && container.offsetWidth > 0 && container.offsetHeight > 0);
   }
@@ -198,6 +203,11 @@
       cachedRegistry = GM_getValue("tw_empire_registry", {});
     }
     return cachedRegistry;
+  }
+
+  function setRegistry(registry) {
+    cachedRegistry = registry;
+    GM_setValue("tw_empire_registry", registry);
   }
 
   function copySummaryToClipboard(fullData = false) {
@@ -282,12 +292,20 @@
   }
 
   function createCard() {
-    if (document.getElementById("tw-empire-troop-card")) return;
-
     const sideMenuContainer = getSideMenuContainer();
     if (!sideMenuContainer) return;
 
-    const card = document.createElement("div");
+    let card = document.getElementById("tw-empire-troop-card");
+
+    // Check if the card is attached to an old/stale DOM container
+    if (card && card.parentElement !== sideMenuContainer) {
+      card.remove();
+      card = null;
+    }
+
+    if (card) return;
+
+    card = document.createElement("div");
     card.id = "tw-empire-troop-card";
     card.title = "Single Click: Copy Stats | Double Click: Copy Full Breakdown";
 
@@ -394,7 +412,14 @@
     }
   }
 
-  setInterval(() => {
+  function processTroopCheck() {
+    const currentlyOnMap = isMapRoute();
+
+    if (wasOnMapRoute && !currentlyOnMap) {
+      lastParsedSig = "";
+    }
+    wasOnMapRoute = currentlyOnMap;
+
     if (isUpkeepVisible()) {
       createCard();
       const activeCard = document.getElementById("tw-empire-troop-card");
@@ -413,7 +438,7 @@
         if (liveData !== null) {
           const registry = getRegistry();
           registry[activeVillage.id] = { name: activeVillage.name, updatedAt: Date.now(), data: liveData };
-          GM_setValue("tw_empire_registry", registry);
+          setRegistry(registry);
         }
         calculateAndRenderEmpireTotals();
       }
@@ -423,5 +448,26 @@
         card.style.display = "none";
       }
     }
-  }, 1000);
+  }
+
+  const triggerCheck = () => {
+    setTimeout(processTroopCheck, 100);
+    setTimeout(processTroopCheck, 300);
+  };
+
+  const originalPushState = history.pushState;
+  history.pushState = function () {
+    originalPushState.apply(this, arguments);
+    triggerCheck();
+  };
+
+  const originalReplaceState = history.replaceState;
+  history.replaceState = function () {
+    originalReplaceState.apply(this, arguments);
+    triggerCheck();
+  };
+
+  window.addEventListener('popstate', triggerCheck);
+
+  setInterval(processTroopCheck, 1000);
 })();
