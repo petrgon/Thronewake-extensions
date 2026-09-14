@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      6.8
-// @description  Parses village income and trade routes with SVG map visualization, individual resource targets per village, strict header scraping protection, Gist sync, screen-aware tooltips, and non-propagating ESC key shortcuts.
+// @version      7.6
+// @description  Parses village income and trade routes with zoomable/pannable SVG map visualization, configurable center zone radius, non-scaling labels/lines on zoom, target income tracking, strict header scraping protection, deferred modal rendering, and memory/CPU optimization.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
 // @grant        GM_setValue
@@ -18,19 +18,89 @@
     const STORAGE_KEY = 'tw_auto_visualizer_data_v3';
     const GIST_FILENAME = 'thronewake_targets.json';
     let activeMobileItemId = null;
+    let headerScrapeTimer = null;
+    let observerDebounceTimer = null;
+    let lastSavedJson = '';
 
-    // --- State Storage ---
+    // --- Pan & Zoom State ---
+    let transformState = {
+        scale: 1,
+        x: 0,
+        y: 0,
+        isDragging: false,
+        startX: 0,
+        startY: 0,
+        hasDragged: false
+    };
+
+    function applyViewportTransform() {
+        const viewport = document.getElementById('tw-viewport');
+        if (viewport) {
+            viewport.setAttribute('transform', `translate(${transformState.x}, ${transformState.y}) scale(${transformState.scale})`);
+
+            const invScale = 1 / transformState.scale;
+
+            const nodes = viewport.querySelectorAll('.tw-node-element');
+            nodes.forEach(node => {
+                const wx = node.getAttribute('data-wx');
+                const wy = node.getAttribute('data-wy');
+                node.setAttribute('transform', `translate(${wx}, ${wy}) scale(${invScale})`);
+            });
+
+            const arrows = viewport.querySelectorAll('.tw-route-arrow');
+            arrows.forEach(arrow => {
+                const mx = arrow.getAttribute('data-mx');
+                const my = arrow.getAttribute('data-my');
+                const angle = arrow.getAttribute('data-angle');
+                arrow.setAttribute('transform', `translate(${mx}, ${my}) rotate(${angle}) scale(${invScale})`);
+            });
+        }
+    }
+
+    function resetViewportTransform() {
+        transformState.scale = 1;
+        transformState.x = 0;
+        transformState.y = 0;
+        applyViewportTransform();
+    }
+
+    function zoomViewport(factor, centerPoint = null) {
+        const svgEl = document.getElementById('tw-svg');
+        if (!svgEl) return;
+
+        let cx, cy;
+        if (centerPoint) {
+            cx = centerPoint.x;
+            cy = centerPoint.y;
+        } else {
+            cx = svgEl.clientWidth / 2;
+            cy = svgEl.clientHeight / 2;
+        }
+
+        const newScale = Math.min(Math.max(transformState.scale * factor, 0.15), 12);
+        if (newScale !== transformState.scale) {
+            transformState.x = cx - (cx - transformState.x) * (newScale / transformState.scale);
+            transformState.y = cy - (cy - transformState.y) * (newScale / transformState.scale);
+            transformState.scale = newScale;
+            applyViewportTransform();
+        }
+    }
+
+    // --- State Storage with Deduplication ---
     function loadState() {
         try {
-            const data = JSON.parse(GM_getValue(STORAGE_KEY, JSON.stringify({ villages: {}, routes: [], customItems: [], gistId: '', gistKey: '' })));
+            const rawData = GM_getValue(STORAGE_KEY, '');
+            lastSavedJson = rawData;
+            const data = JSON.parse(rawData || '{}');
             if (!data.customItems) data.customItems = [];
             if (!data.routes) data.routes = [];
             if (!data.villages) data.villages = {};
             if (!data.gistId) data.gistId = '';
             if (!data.gistKey) data.gistKey = '';
+            if (data.zoneRadius === undefined || isNaN(parseFloat(data.zoneRadius))) data.zoneRadius = 14;
             return data;
         } catch (e) {
-            return { villages: {}, routes: [], customItems: [], gistId: '', gistKey: '' };
+            return { villages: {}, routes: [], customItems: [], gistId: '', gistKey: '', zoneRadius: 14 };
         }
     }
 
@@ -39,7 +109,11 @@
     }
 
     function saveState(stateData) {
-        GM_setValue(STORAGE_KEY, JSON.stringify(stateData));
+        const serialized = JSON.stringify(stateData);
+        if (serialized !== lastSavedJson) {
+            lastSavedJson = serialized;
+            GM_setValue(STORAGE_KEY, serialized);
+        }
     }
 
     let state = loadState();
@@ -205,7 +279,6 @@
         }
     }
 
-    // --- Delete Custom Marker ---
     function deleteCustomMarker(id) {
         if (!state.customItems) return;
         state.customItems = state.customItems.filter(item => item.id !== id);
@@ -213,7 +286,6 @@
         render();
     }
 
-    // --- Helper: Resolve Village Name ---
     function getVillageName(x, y, fallbackName = '') {
         const key = `${x},${y}`;
         if (state.villages[key] && state.villages[key].name) {
@@ -222,7 +294,6 @@
         return fallbackName || `Village (${x}|${y})`;
     }
 
-    // --- Helper: Get Safely Structured Resource Targets ---
     function getVillageRequiredIncome(v) {
         if (!v || !v.requiredIncome || typeof v.requiredIncome !== 'object') {
             return { wood: '', clay: '', iron: '', crop: '' };
@@ -235,7 +306,6 @@
         };
     }
 
-    // --- Net Income Calculation ---
     function getVillageNetIncome(v) {
         let wood = v.wood || 0;
         let clay = v.clay || 0;
@@ -261,7 +331,6 @@
         return { wood, clay, iron, crop, total };
     }
 
-    // --- Helper: Color Logic for Villages ---
     function getVillageNodeColor(v) {
         const net = getVillageNetIncome(v);
 
@@ -294,11 +363,13 @@
         return '#22c55e';
     }
 
-    // --- Helper: Update Route Status Badge Text ---
     function updateRouteStatusBadge(parsedCount) {
         const statusEl = document.getElementById('tw-route-status');
         if (statusEl) {
-            if (typeof parsedCount === 'number') {
+            if (parsedCount === 'loading' || parsedCount === -1) {
+                statusEl.textContent = `⏳ Loading routes...`;
+                statusEl.style.color = '#f59e0b';
+            } else if (typeof parsedCount === 'number') {
                 statusEl.textContent = `✓ Parsed ${parsedCount} (Total: ${state.routes.length})`;
                 statusEl.style.color = '#28a745';
             } else {
@@ -308,7 +379,6 @@
         }
     }
 
-    // --- Strict Header Rate Scraper ---
     function extractHeaderRates() {
         const header = document.querySelector('header');
         if (!header) return null;
@@ -335,8 +405,12 @@
         return null;
     }
 
-    // --- Scrape Current Active Village & Header Income Rates ---
-    function scrapePageVillageData() {
+    function scrapePageVillageData(attempt = 1) {
+        if (attempt === 1 && headerScrapeTimer) {
+            clearTimeout(headerScrapeTimer);
+            headerScrapeTimer = null;
+        }
+
         const activeVillageEl = document.querySelector('#_r_d_-select span') || document.querySelector('select[aria-label="Switch village"] option:checked');
         let text = activeVillageEl ? activeVillageEl.textContent.trim() : '';
 
@@ -355,37 +429,59 @@
         const headerRates = extractHeaderRates();
         const existingReq = getVillageRequiredIncome(state.villages[key] || {});
 
-        if (!state.villages[key]) {
-            state.villages[key] = {
-                id: name,
-                name: name,
-                x: x,
-                y: y,
-                wood: headerRates ? headerRates.wood : 0,
-                clay: headerRates ? headerRates.clay : 0,
-                iron: headerRates ? headerRates.iron : 0,
-                crop: headerRates ? headerRates.crop : 0,
-                requiredIncome: existingReq,
-                isPlaceholder: !headerRates,
-                lastSeen: Date.now()
-            };
+        if (headerRates) {
+            if (!state.villages[key]) {
+                state.villages[key] = {
+                    id: name,
+                    name: name,
+                    x: x,
+                    y: y,
+                    wood: headerRates.wood,
+                    clay: headerRates.clay,
+                    iron: headerRates.iron,
+                    crop: headerRates.crop,
+                    requiredIncome: existingReq,
+                    isPlaceholder: false,
+                    lastSeen: Date.now()
+                };
+            } else {
+                state.villages[key].id = name;
+                state.villages[key].name = name;
+                state.villages[key].wood = headerRates.wood;
+                state.villages[key].clay = headerRates.clay;
+                state.villages[key].iron = headerRates.iron;
+                state.villages[key].crop = headerRates.crop;
+                state.villages[key].isPlaceholder = false;
+                state.villages[key].lastSeen = Date.now();
+            }
             saveState(state);
-        } else if (headerRates) {
-            state.villages[key].id = name;
-            state.villages[key].name = name;
-            state.villages[key].wood = headerRates.wood;
-            state.villages[key].clay = headerRates.clay;
-            state.villages[key].iron = headerRates.iron;
-            state.villages[key].crop = headerRates.crop;
-            state.villages[key].isPlaceholder = false;
-            state.villages[key].lastSeen = Date.now();
-            saveState(state);
+            render();
+        } else {
+            if (attempt < 5) {
+                headerScrapeTimer = setTimeout(() => {
+                    scrapePageVillageData(attempt + 1);
+                }, 400);
+            } else if (!state.villages[key]) {
+                state.villages[key] = {
+                    id: name,
+                    name: name,
+                    x: x,
+                    y: y,
+                    wood: 0,
+                    clay: 0,
+                    iron: 0,
+                    crop: 0,
+                    requiredIncome: existingReq,
+                    isPlaceholder: true,
+                    lastSeen: Date.now()
+                };
+                saveState(state);
+            }
         }
 
         return state.villages[key];
     }
 
-    // --- Locate "Trade routes" Header in Page ---
     function findTradeRoutesHeader() {
         const h2s = document.querySelectorAll('h2');
         for (const h2 of h2s) {
@@ -396,7 +492,6 @@
         return null;
     }
 
-    // --- Scrape Precise Trade Route HTML Items ---
     function scrapeTradeRoutesFromDOM() {
         const origin = scrapePageVillageData();
         if (!origin) return 0;
@@ -407,7 +502,20 @@
         const section = header.closest('section');
         if (!section) return 0;
 
-        const routeCards = section.querySelectorAll('li.paper:has(input[name^="route-enabled"]), li.paper:has(input[type="checkbox"])');
+        const ulEl = section.querySelector('ul');
+        const directDivs = section.querySelectorAll(':scope > div');
+
+        const isStillLoading = !ulEl && (
+            /Loading\s+trade\s+routes/i.test(section.textContent) ||
+            directDivs.length > 1
+        );
+
+        if (isStillLoading) {
+            updateRouteStatusBadge('loading');
+            return -1;
+        }
+
+        const routeCards = ulEl ? ulEl.querySelectorAll('li.paper:has(input[name^="route-enabled"]), li.paper:has(input[type="checkbox"])') : [];
         const foundRoutes = [];
 
         routeCards.forEach((card, cardIdx) => {
@@ -508,7 +616,7 @@
 
         const otherRoutes = state.routes.filter(r => !(r.fromX === origin.x && r.fromY === origin.y));
         state.routes = [...otherRoutes, ...foundRoutes];
-        
+
         const uniqueMap = new Map();
         state.routes.forEach(r => {
             const sig = `${r.fromX}_${r.fromY}_to_${r.toX}_${r.toY}_${r.wood}_${r.clay}_${r.iron}_${r.crop}_${r.repeatHours}_${r.deliveries}`;
@@ -581,12 +689,10 @@
                     render();
                 }, 200);
             };
-        }
 
-        setTimeout(() => {
             const count = scrapeTradeRoutesFromDOM();
             updateRouteStatusBadge(count);
-        }, 300);
+        }
     }
 
     function getRouteColor(route) {
@@ -618,6 +724,33 @@
                 --tw-paper-light: #e8d8b7;
                 --tw-blue-primary: #165eb9;
                 --tw-blue-hover: #1c6ed8;
+            }
+            #tw-svg {
+                cursor: grab;
+                user-select: none;
+            }
+            #tw-svg:active {
+                cursor: grabbing;
+            }
+            .tw-zoom-btn {
+                background: #23201c;
+                color: #e8d8b7;
+                border: 1px solid var(--tw-paper-brown);
+                width: 28px;
+                height: 28px;
+                border-radius: 4px;
+                font-size: 13px;
+                font-weight: bold;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+                transition: background 0.15s ease, color 0.15s ease;
+            }
+            .tw-zoom-btn:hover {
+                background: #3d3730;
+                color: #fff;
             }
             #tw-graph-btn {
                 display: inline-flex; align-items: center; gap: 6px;
@@ -687,7 +820,10 @@
             .tw-legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
             .tw-legend-item:last-child { margin-bottom: 0; }
             .tw-legend-color { width: 12px; height: 12px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
-            .tw-route-path, .tw-route-arrow { transition: opacity 0.15s ease, stroke-width 0.15s ease; }
+            .tw-route-path {
+                transition: opacity 0.15s ease, stroke-width 0.15s ease;
+                vector-effect: non-scaling-stroke;
+            }
 
             #tw-add-custom-btn {
                 position: absolute; top: 12px; left: 12px; z-index: 10000;
@@ -696,7 +832,7 @@
                 border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.6);
             }
             #tw-add-custom-btn:hover { background: #1c6ed8; }
-            
+
             .tw-settings-popover {
                 display: none; position: absolute; top: 50px; right: 12px; z-index: 100003;
                 background: #141210; border: 2px solid var(--tw-paper-brown); padding: 18px;
@@ -766,7 +902,6 @@
         document.head.appendChild(style);
     }
 
-    // --- Smart Tooltip Renderer ---
     function showTooltip(html, e) {
         const tooltip = document.getElementById('tw-tooltip');
         if (!tooltip) return;
@@ -805,10 +940,9 @@
         if (tooltip) tooltip.style.display = 'none';
     }
 
-    // --- Interaction Handler ---
     function handleInteractiveElement(el, itemId, navUrl, getTooltipContent, onActivate, onDeactivate, onClickAction) {
         el.onmousemove = (e) => {
-            if (window.innerWidth > 768) {
+            if (window.innerWidth > 768 && !transformState.isDragging) {
                 if (onActivate) onActivate();
                 showTooltip(getTooltipContent(), e);
             }
@@ -822,6 +956,12 @@
         };
 
         el.onclick = (e) => {
+            if (transformState.hasDragged) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
+
             if (onClickAction) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -849,7 +989,6 @@
         };
     }
 
-    // --- Village Modal Popover ---
     let targetVillageKey = null;
 
     function openVillageModal(v) {
@@ -910,8 +1049,19 @@
                     <div class="tw-canvas-container" id="tw-canvas-container">
                         <button id="tw-add-custom-btn" type="button">➕ Add Marker</button>
 
+                        <div id="tw-zoom-controls" style="
+                            position: absolute; top: 12px; right: 12px; z-index: 10000;
+                            display: flex; flex-direction: column; gap: 6px;
+                        ">
+                            <button class="tw-zoom-btn" id="tw-zoom-in" type="button" title="Zoom In">➕</button>
+                            <button class="tw-zoom-btn" id="tw-zoom-out" type="button" title="Zoom Out">➖</button>
+                            <button class="tw-zoom-btn" id="tw-zoom-reset" type="button" title="Reset View">🎯</button>
+                        </div>
+
                         <div class="tw-settings-popover" id="tw-settings-popover">
-                            <h4>⚙️ Gist Synchronization Settings</h4>
+                            <h4>⚙️ Map & Gist Settings</h4>
+                            <label>Center Zone Radius:</label>
+                            <input type="number" id="tw-zone-radius-input" placeholder="14" min="0" step="1" />
                             <label>GitHub Gist ID:</label>
                             <input type="text" id="tw-gist-id-input" placeholder="e.g. 8a7f2b9c0d1e2f3a4b5c" />
                             <label>GitHub Access Token (Key):</label>
@@ -926,7 +1076,7 @@
                         <div class="tw-village-popover" id="tw-village-popover">
                             <h4 id="tw-village-popover-title">Village Resource Targets</h4>
                             <div id="tw-village-net-info" style="margin-bottom:12px;"></div>
-                            
+
                             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
                                 <div>
                                     <label>🌲 Wood Target (/h):</label>
@@ -978,7 +1128,7 @@
                         </div>
 
                         <svg id="tw-svg" width="100%" height="100%"></svg>
-                        
+
                         <div class="tw-legend">
                             <strong style="display:block; margin-bottom: 4px; border-bottom: 1px solid #332e28; padding-bottom: 2px;">Village Income Status</strong>
                             <div class="tw-legend-item"><span class="tw-legend-color" style="background:#ef4444;"></span> Negative Resource Net</div>
@@ -1001,7 +1151,78 @@
         `;
         document.body.appendChild(overlay);
 
-        // --- Non-propagating ESC Key Handler ---
+        const canvasContainer = document.getElementById('tw-canvas-container');
+        const svgEl = document.getElementById('tw-svg');
+
+        document.getElementById('tw-zoom-in').onclick = (e) => { e.stopPropagation(); zoomViewport(1.25); };
+        document.getElementById('tw-zoom-out').onclick = (e) => { e.stopPropagation(); zoomViewport(0.8); };
+        document.getElementById('tw-zoom-reset').onclick = (e) => { e.stopPropagation(); resetViewportTransform(); };
+
+        canvasContainer.addEventListener('wheel', (e) => {
+            const overlay = document.getElementById('tw-modal-overlay');
+            if (!overlay || overlay.style.display === 'none') return;
+            e.preventDefault();
+
+            const rect = svgEl.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const factor = e.deltaY < 0 ? 1.15 : 0.85;
+            zoomViewport(factor, { x: mouseX, y: mouseY });
+        }, { passive: false });
+
+        let dragStartX = 0, dragStartY = 0;
+
+        function handleDragMove(e) {
+            if (!transformState.isDragging) return;
+            const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+            const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+
+            const dist = Math.hypot(clientX - dragStartX, clientY - dragStartY);
+            if (dist > 4) {
+                transformState.hasDragged = true;
+            }
+            transformState.x = clientX - transformState.startX;
+            transformState.y = clientY - transformState.startY;
+            applyViewportTransform();
+        }
+
+        function handleDragEnd() {
+            transformState.isDragging = false;
+            window.removeEventListener('mousemove', handleDragMove);
+            window.removeEventListener('mouseup', handleDragEnd);
+            window.removeEventListener('touchmove', handleDragMove);
+            window.removeEventListener('touchend', handleDragEnd);
+        }
+
+        svgEl.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            transformState.isDragging = true;
+            transformState.hasDragged = false;
+            dragStartX = e.clientX;
+            dragStartY = e.clientY;
+            transformState.startX = e.clientX - transformState.x;
+            transformState.startY = e.clientY - transformState.y;
+
+            window.addEventListener('mousemove', handleDragMove);
+            window.addEventListener('mouseup', handleDragEnd);
+        });
+
+        svgEl.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                transformState.isDragging = true;
+                transformState.hasDragged = false;
+                const touch = e.touches[0];
+                dragStartX = touch.clientX;
+                dragStartY = touch.clientY;
+                transformState.startX = touch.clientX - transformState.x;
+                transformState.startY = touch.clientY - transformState.y;
+
+                window.addEventListener('touchmove', handleDragMove, { passive: true });
+                window.addEventListener('touchend', handleDragEnd);
+            }
+        }, { passive: true });
+
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' || e.keyCode === 27) {
                 e.preventDefault();
@@ -1040,8 +1261,9 @@
 
         document.getElementById('tw-reset-btn').onclick = () => {
             if (confirm('Clear all stored village income, trade route, and custom marker data?')) {
-                state = { villages: {}, routes: [], customItems: [], gistId: state.gistId, gistKey: state.gistKey };
+                state = { villages: {}, routes: [], customItems: [], gistId: state.gistId, gistKey: state.gistKey, zoneRadius: state.zoneRadius || 14 };
                 saveState(state);
+                resetViewportTransform();
                 scrapePageVillageData();
                 render();
                 updateRouteStatusBadge(0);
@@ -1100,6 +1322,7 @@
             villagePopover.style.display = 'none';
             popover.style.display = 'none';
 
+            document.getElementById('tw-zone-radius-input').value = state.zoneRadius !== undefined ? state.zoneRadius : 14;
             document.getElementById('tw-gist-id-input').value = state.gistId || '';
             document.getElementById('tw-gist-key-input').value = state.gistKey || '';
 
@@ -1111,10 +1334,13 @@
         };
 
         document.getElementById('tw-settings-save-btn').onclick = () => {
+            const parsedRadius = parseFloat(document.getElementById('tw-zone-radius-input').value);
+            state.zoneRadius = !isNaN(parsedRadius) && parsedRadius >= 0 ? parsedRadius : 14;
             state.gistId = document.getElementById('tw-gist-id-input').value.trim();
             state.gistKey = document.getElementById('tw-gist-key-input').value.trim();
             saveState(state);
             settingsPopover.style.display = 'none';
+            render();
             syncGist(false);
         };
 
@@ -1151,25 +1377,33 @@
         };
 
         let lastObservedVillage = '';
-        const observer = new MutationObserver(() => {
-            injectHeaderButton();
-            injectTradeRouteControls();
 
-            const selectEl = document.querySelector('#_r_d_-select');
-            if (selectEl) {
-                const currentText = selectEl.textContent.trim();
-                if (currentText !== lastObservedVillage) {
-                    lastObservedVillage = currentText;
-                    setTimeout(() => {
+        // Target Main Container to minimize observer CPU cycles
+        const targetNode = document.querySelector('main') || document.querySelector('#app') || document.body;
+
+        const observer = new MutationObserver(() => {
+            if (observerDebounceTimer) return;
+
+            observerDebounceTimer = setTimeout(() => {
+                observerDebounceTimer = null;
+                injectHeaderButton();
+                injectTradeRouteControls();
+
+                const selectEl = document.querySelector('#_r_d_-select');
+                if (selectEl) {
+                    const currentText = selectEl.textContent.trim();
+                    if (currentText !== lastObservedVillage) {
+                        lastObservedVillage = currentText;
                         scrapePageVillageData();
                         const parsedCount = scrapeTradeRoutesFromDOM();
                         updateRouteStatusBadge(parsedCount);
                         render();
-                    }, 300);
+                    }
                 }
-            }
+            }, 250);
         });
-        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+        observer.observe(targetNode, { childList: true, subtree: true });
 
         injectHeaderButton();
         injectTradeRouteControls();
@@ -1213,7 +1447,6 @@
         }
     }
 
-    // --- Helper: Format Resource Line in Tooltip with b, i, o, t ---
     function formatResourceTooltipLine(icon, name, base, inc, out, target) {
         const total = base + inc - out;
         let targetDetails = '';
@@ -1246,10 +1479,10 @@
                 incCrop += (r.crop || 0);
             }
             if (r.fromX === v.x && r.fromY === v.y) {
-                outWood += (r.wood || 0);
-                outClay += (r.clay || 0);
-                outIron += (r.iron || 0);
-                outCrop += (r.crop || 0);
+                outWood -= (r.wood || 0);
+                outClay -= (r.clay || 0);
+                outIron -= (r.iron || 0);
+                outCrop -= (r.crop || 0);
             }
         });
 
@@ -1285,14 +1518,31 @@
         `;
     }
 
-    // --- Render SVG Graph ---
     function render() {
+        const overlay = document.getElementById('tw-modal-overlay');
+        // Deferred Render Optimization: skip building SVG DOM while modal is hidden
+        if (overlay && overlay.style.display === 'none') return;
+
         const villages = Object.values(state.villages);
         const routes = state.routes;
         const customItems = state.customItems || [];
         const svg = document.getElementById('tw-svg');
         const container = document.getElementById('tw-canvas-container');
         const sidebarList = document.getElementById('tw-village-list');
+
+        if (!svg || !container || !sidebarList) return;
+
+        // Clean up detached listeners before wiping innerHTML to prevent memory leaks
+        svg.querySelectorAll('*').forEach(el => {
+            el.onmousemove = null;
+            el.onmouseleave = null;
+            el.onclick = null;
+        });
+        sidebarList.querySelectorAll('*').forEach(el => {
+            el.onmousemove = null;
+            el.onmouseleave = null;
+            el.onclick = null;
+        });
 
         svg.innerHTML = '';
         sidebarList.innerHTML = '';
@@ -1302,8 +1552,14 @@
             return;
         }
 
-        const allXs = [...villages.map(v => v.x), ...customItems.map(c => c.x)];
-        const allYs = [...villages.map(v => v.y), ...customItems.map(c => c.y)];
+        const viewportElement = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        viewportElement.id = 'tw-viewport';
+        svg.appendChild(viewportElement);
+
+        const zoneRad = state.zoneRadius !== undefined && !isNaN(parseFloat(state.zoneRadius)) ? parseFloat(state.zoneRadius) : 14;
+
+        const allXs = [...villages.map(v => v.x), ...customItems.map(c => c.x), 0, -zoneRad, zoneRad];
+        const allYs = [...villages.map(v => v.y), ...customItems.map(c => c.y), 0, -zoneRad, zoneRad];
 
         let minX = Math.min(...allXs), maxX = Math.max(...allXs);
         let minY = Math.min(...allYs), maxY = Math.max(...allYs);
@@ -1314,6 +1570,58 @@
 
         const mapX = (x) => ((x - minX) / ((maxX - minX) || 1)) * (width - 100) + 50;
         const mapY = (y) => height - (((y - minY) / ((maxY - minY) || 1)) * (height - 100) + 50);
+
+        const invScale = 1 / transformState.scale;
+
+        const bgGroupElement = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        bgGroupElement.id = 'tw-bg-group';
+
+        const c00x = mapX(0);
+        const c00y = mapY(0);
+
+        if (zoneRad > 0) {
+            const radiusPixels = Math.abs(mapY(zoneRad) - mapY(0));
+            const circle00 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle00.setAttribute('cx', c00x);
+            circle00.setAttribute('cy', c00y);
+            circle00.setAttribute('r', radiusPixels);
+            circle00.setAttribute('fill', 'rgba(128, 128, 128, 0.18)');
+            circle00.setAttribute('stroke', 'rgba(180, 180, 180, 0.5)');
+            circle00.setAttribute('stroke-width', '1.5');
+            circle00.setAttribute('stroke-dasharray', '4 4');
+            circle00.setAttribute('vector-effect', 'non-scaling-stroke');
+            circle00.style.pointerEvents = 'none';
+
+            bgGroupElement.appendChild(circle00);
+        }
+
+        const centerG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        centerG.setAttribute('class', 'tw-node-element');
+        centerG.setAttribute('data-wx', c00x);
+        centerG.setAttribute('data-wy', c00y);
+        centerG.setAttribute('transform', `translate(${c00x}, ${c00y}) scale(${invScale})`);
+        centerG.style.pointerEvents = 'none';
+
+        const centerDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        centerDot.setAttribute('cx', 0);
+        centerDot.setAttribute('cy', 0);
+        centerDot.setAttribute('r', '4');
+        centerDot.setAttribute('fill', '#a8a8a8');
+        centerDot.setAttribute('stroke', '#ffffff');
+        centerDot.setAttribute('stroke-width', '1.5');
+        centerDot.setAttribute('vector-effect', 'non-scaling-stroke');
+
+        const centerText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        centerText.setAttribute('x', 8);
+        centerText.setAttribute('y', 4);
+        centerText.setAttribute('fill', '#aaaaaa');
+        centerText.setAttribute('font-size', '11px');
+        centerText.setAttribute('font-weight', 'bold');
+        centerText.textContent = `Center (0|0)`;
+
+        centerG.appendChild(centerDot);
+        centerG.appendChild(centerText);
+        bgGroupElement.appendChild(centerG);
 
         const routeGroupMap = new Map();
         routes.forEach(r => {
@@ -1328,8 +1636,9 @@
         const nodesGroupElement = document.createElementNS('http://www.w3.org/2000/svg', 'g');
         nodesGroupElement.id = 'tw-nodes-group';
 
-        svg.appendChild(routesGroupElement);
-        svg.appendChild(nodesGroupElement);
+        viewportElement.appendChild(bgGroupElement);
+        viewportElement.appendChild(routesGroupElement);
+        viewportElement.appendChild(nodesGroupElement);
 
         const routeDomMap = new Map();
 
@@ -1350,7 +1659,6 @@
             deactivateTooltip();
         }
 
-        // --- Render Trade Routes ---
         routes.forEach(r => {
             const x1 = mapX(r.fromX), y1 = mapY(r.fromY);
             const x2 = mapX(r.toX), y2 = mapY(r.toY);
@@ -1391,13 +1699,18 @@
             const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
             arrow.setAttribute('points', '-7,-5 6,0 -7,5');
             arrow.setAttribute('fill', color);
-            arrow.setAttribute('transform', `translate(${mx}, ${my}) rotate(${arrowAngle})`);
             arrow.setAttribute('class', 'tw-route-arrow');
+            arrow.setAttribute('data-mx', mx);
+            arrow.setAttribute('data-my', my);
+            arrow.setAttribute('data-angle', arrowAngle);
+            arrow.setAttribute('transform', `translate(${mx}, ${my}) rotate(${arrowAngle}) scale(${invScale})`);
             arrow.style.pointerEvents = 'none';
 
             path.onmousemove = (e) => {
-                activateRouteHighlight(path, arrow);
-                showTooltip(getRouteTooltipHtml(r), e);
+                if (!transformState.isDragging) {
+                    activateRouteHighlight(path, arrow);
+                    showTooltip(getRouteTooltipHtml(r), e);
+                }
             };
             path.onmouseleave = () => deactivateRouteHighlight();
 
@@ -1407,23 +1720,27 @@
             routeDomMap.set(r.id, { route: r, path: path, arrow: arrow });
         });
 
-        // --- Render Villages on SVG ---
         villages.forEach(v => {
             const cx = mapX(v.x), cy = mapY(v.y);
 
             const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            g.setAttribute('class', 'tw-node-element');
+            g.setAttribute('data-wx', cx);
+            g.setAttribute('data-wy', cy);
+            g.setAttribute('transform', `translate(${cx}, ${cy}) scale(${invScale})`);
             g.style.cursor = 'pointer';
 
             const nodeColor = getVillageNodeColor(v);
 
             const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-            circle.setAttribute('cx', cx); circle.setAttribute('cy', cy); circle.setAttribute('r', '8');
+            circle.setAttribute('cx', 0); circle.setAttribute('cy', 0); circle.setAttribute('r', '8');
             circle.setAttribute('fill', nodeColor);
             circle.setAttribute('stroke', '#e8d8b7');
             circle.setAttribute('stroke-width', '2');
+            circle.setAttribute('vector-effect', 'non-scaling-stroke');
 
             const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            text.setAttribute('x', cx + 12); text.setAttribute('y', cy + 4);
+            text.setAttribute('x', 12); text.setAttribute('y', 4);
             text.setAttribute('fill', '#e8d8b7'); text.setAttribute('font-size', '12px');
             text.setAttribute('font-weight', 'bold');
             text.style.pointerEvents = 'none';
@@ -1446,21 +1763,25 @@
             nodesGroupElement.appendChild(g);
         });
 
-        // --- Render Custom Map Markers ---
         customItems.forEach(c => {
             const cx = mapX(c.x), cy = mapY(c.y);
 
             const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            g.setAttribute('class', 'tw-node-element');
+            g.setAttribute('data-wx', cx);
+            g.setAttribute('data-wy', cy);
+            g.setAttribute('transform', `translate(${cx}, ${cy}) scale(${invScale})`);
             g.style.cursor = 'pointer';
 
             const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-            circle.setAttribute('cx', cx); circle.setAttribute('cy', cy); circle.setAttribute('r', '6');
+            circle.setAttribute('cx', 0); circle.setAttribute('cy', 0); circle.setAttribute('r', '6');
             circle.setAttribute('fill', c.color);
             circle.setAttribute('stroke', '#ffffff');
             circle.setAttribute('stroke-width', '1.5');
+            circle.setAttribute('vector-effect', 'non-scaling-stroke');
 
             const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            text.setAttribute('x', cx + 12); text.setAttribute('y', cy + 4);
+            text.setAttribute('x', 12); text.setAttribute('y', 4);
             text.setAttribute('fill', c.color); text.setAttribute('font-size', '12px');
             text.setAttribute('font-weight', 'bold');
             text.style.pointerEvents = 'none';
@@ -1489,7 +1810,6 @@
             nodesGroupElement.appendChild(g);
         });
 
-        // --- Render Sidebar ---
         const sortedVillages = [...villages].sort((a, b) =>
             (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
         );
@@ -1527,7 +1847,6 @@
             sidebarList.appendChild(div);
         });
 
-        // Custom Markers Sidebar
         if (customItems.length > 0) {
             const sortedCustomItems = [...customItems].sort((a, b) =>
                 (a.title || '').localeCompare(b.title || '', undefined, { numeric: true, sensitivity: 'base' })
@@ -1575,7 +1894,6 @@
             });
         }
 
-        // Active Routes Sidebar
         if (routes.length > 0) {
             const sortedRoutes = [...routes].sort((a, b) => {
                 const nameA = `${getVillageName(a.fromX, a.fromY)} -> ${a.destName || getVillageName(a.toX, a.toY)}`;
@@ -1612,6 +1930,8 @@
                 sidebarList.appendChild(div);
             });
         }
+
+        applyViewportTransform();
     }
 
     scrapePageVillageData();
