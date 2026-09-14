@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake - Empire Defense Tracker
 // @namespace    violentmonkey-thronewake-troops
-// @version      8.7
-// @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown.
+// @version      9.1
+// @description  Tracks empire defense troops. Single-click to copy stats line, slow double-click (within 800ms) for full breakdown. Performance, position & selector optimized.
 // @author       petrgon
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
@@ -22,7 +22,7 @@
       border-radius: 4px;
       box-shadow: inset 0 0 8px rgba(16, 16, 16, 0.25), 0 4px 6px -1px rgba(0, 0, 0, 0.2);
       padding: 2px 6px;
-      margin: 0;
+      margin: 0 0 6px 0;
       font-family: inherit;
       font-size: 15px;
       line-height: 1.25;
@@ -44,97 +44,32 @@
       }
     }
 
-    #tw-empire-troop-card:hover {
-      background-color: #f3efe0;
-    }
-
-    #tw-empire-troop-card:active {
-      background-color: #dfd8be;
-    }
+    #tw-empire-troop-card:hover { background-color: #f3efe0; }
+    #tw-empire-troop-card:active { background-color: #dfd8be; }
 
     .tw-card-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 4px;
-      border-bottom: 1px solid rgba(16, 16, 16, 0.2);
-      padding-bottom: 1px;
-      margin-bottom: 1px;
-      white-space: nowrap;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 4px; border-bottom: 1px solid rgba(16, 16, 16, 0.2);
+      padding-bottom: 1px; margin-bottom: 1px; white-space: nowrap;
     }
 
-    .tw-card-title-group {
-      display: flex;
-      align-items: center;
-      gap: 3px;
-      white-space: nowrap;
-      min-width: 0;
-    }
+    .tw-card-title-group { display: flex; align-items: center; gap: 3px; white-space: nowrap; min-width: 0; }
+    .tw-card-sync-group { display: none; align-items: center; gap: 3px; white-space: nowrap; }
 
-    .tw-card-sync-group {
-      display: none;
-      align-items: center;
-      gap: 3px;
-      white-space: nowrap;
-    }
-
-    #tw-empire-troop-card:hover:not(.is-copied) .tw-card-title-group {
-      display: none;
-    }
-
-    #tw-empire-troop-card:hover:not(.is-copied) .tw-card-sync-group {
-      display: flex;
-    }
-
-    #tw-empire-troop-card.is-copied #tw-val-empire {
-      display: none;
-    }
+    #tw-empire-troop-card:hover:not(.is-copied) .tw-card-title-group { display: none; }
+    #tw-empire-troop-card:hover:not(.is-copied) .tw-card-sync-group { display: flex; }
+    #tw-empire-troop-card.is-copied #tw-val-empire { display: none; }
 
     .tw-card-title {
-      color: #8a6e46;
-      text-transform: uppercase;
-      font-size: 0.85em;
-      letter-spacing: 0.03em;
-      white-space: nowrap;
-      transition: color 0.15s ease;
+      color: #8a6e46; text-transform: uppercase; font-size: 0.85em;
+      letter-spacing: 0.03em; white-space: nowrap; transition: color 0.15s ease;
     }
 
-    .tw-card-bottom-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 4px;
-      padding-top: 0px;
-      white-space: nowrap;
-    }
-
-    .tw-card-sub-item {
-      display: flex;
-      align-items: center;
-      gap: 2px;
-      white-space: nowrap;
-    }
-
-    .tw-card-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 1em;
-      height: 1em;
-      color: #8a6e46;
-      flex-shrink: 0;
-    }
-
-    .tw-card-val {
-      color: #101010;
-      font-size: 1em;
-      font-variant-numeric: lining-nums;
-      white-space: nowrap;
-    }
-
-    .tw-copied-label {
-      color: #165eb9 !important;
-    }
+    .tw-card-bottom-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding-top: 0px; white-space: nowrap; }
+    .tw-card-sub-item { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
+    .tw-card-icon { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; color: #8a6e46; flex-shrink: 0; }
+    .tw-card-val { color: #101010; font-size: 1em; font-variant-numeric: lining-nums; white-space: nowrap; }
+    .tw-copied-label { color: #165eb9 !important; }
   `);
 
   const ICONS = {
@@ -150,6 +85,8 @@
   const SCOUT_UNITS   = ["sentinel", "pathstalker", "wind scout", "scout", "pathfinder", "spy", "watcher"];
 
   let resetCopyTimeout = null;
+  let lastParsedSig = "";
+  let cachedRegistry = null;
 
   function formatNum(num) {
     return num.toLocaleString('en-US');
@@ -164,10 +101,9 @@
   }
 
   function getVillageInfo() {
-    let totalVillages = 0;
     const select = document.querySelector('select[aria-label="Switch village"]');
     if (select && select.options.length > 0) {
-      totalVillages = select.options.length;
+      const totalVillages = select.options.length;
       const selectedOption = select.options[select.selectedIndex] || select.querySelector('option[selected]');
       if (selectedOption) {
         return { id: selectedOption.value || selectedOption.textContent.trim(), name: selectedOption.textContent.trim(), totalVillages };
@@ -183,41 +119,72 @@
     return { id: "global", name: "Global", totalVillages: 1 };
   }
 
-  function isUpkeepVisible() {
-    const srSpans = document.querySelectorAll('div.fixed.left-2.z-20 span.sr-only, div.fixed.left-4.z-20 span.sr-only, span.sr-only');
+  // Targeted Left-Sidebar Finder (Excludes bottom panels)
+  function getSideMenuContainer() {
+    const srSpans = document.querySelectorAll('span.sr-only');
     for (const span of srSpans) {
       if (span.textContent.trim() === 'Food consumption') {
-        const container = span.closest('div.fixed');
-        if (container && container.offsetWidth > 0 && container.offsetHeight > 0) return true;
+        const fixedParent = span.closest('div.fixed');
+        if (fixedParent && !fixedParent.className.includes('bottom-')) {
+          return fixedParent;
+        }
       }
     }
-    return false;
+
+    const candidates = document.querySelectorAll('div.fixed');
+    for (const el of candidates) {
+      const cls = el.className;
+      if ((cls.includes('left-2') || cls.includes('left-4') || cls.includes('left-3') || cls.includes('left-6')) && !cls.includes('bottom-')) {
+        return el;
+      }
+    }
+
+    for (const el of candidates) {
+      if (el.className.includes('bottom-')) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.left >= 0 && rect.left < 120 && rect.top < window.innerHeight * 0.4 && rect.height > 20) {
+        return el;
+      }
+    }
+
+    return null;
+  }
+
+  function isUpkeepVisible() {
+    const container = getSideMenuContainer();
+    return !!(container && container.offsetWidth > 0 && container.offsetHeight > 0);
   }
 
   function parseTroopsFromDOM() {
-    const lis = document.querySelectorAll('main ~ div ul li, div.fixed.bottom-0 ul li');
-    if (!lis || lis.length === 0) return null;
+    const troopLinks = document.querySelectorAll('a[href*="send-troops"]');
+    if (!troopLinks || troopLinks.length === 0) return null;
 
     const data = { total: 0, categories: { def_inf: 0, def_cav: 0, scout: 0 }, details: { def_inf: [], def_cav: [], scout: [] } };
     let foundAny = false;
 
-    lis.forEach(li => {
-      const fullText = li.getAttribute('aria-label') || li.textContent || "";
-      const match = getTroopMatch(fullText);
+    troopLinks.forEach(a => {
+      const li = a.closest('li') || a.parentElement;
+      if (!li) return;
+
+      const srSpan = li.querySelector('span.sr-only');
+      const unitNameText = srSpan ? srSpan.textContent : li.textContent;
+      const match = getTroopMatch(unitNameText) || getTroopMatch(li.textContent);
 
       if (match) {
-        const lowerText = fullText.toLowerCase();
-        const idx = lowerText.indexOf(match.unit);
-        const textAfter = fullText.slice(idx + match.unit.length);
-        const countMatch = textAfter.match(/([\d,]+)/);
+        const countEl = li.querySelector('div.font-medium');
+        let count = 0;
 
-        if (countMatch) {
-          const count = parseInt(countMatch[1].replace(/,/g, ''), 10);
-          if (!isNaN(count)) {
-            foundAny = true;
-            data.categories[match.category] += count;
-            data.details[match.category].push({ name: match.unit, count });
-          }
+        if (countEl) {
+          count = parseInt(countEl.textContent.replace(/,/g, ''), 10);
+        } else {
+          const countMatch = li.textContent.match(/([\d,]+)/);
+          if (countMatch) count = parseInt(countMatch[1].replace(/,/g, ''), 10);
+        }
+
+        if (!isNaN(count) && count > 0) {
+          foundAny = true;
+          data.categories[match.category] += count;
+          data.details[match.category].push({ name: match.unit, count });
         }
       }
     });
@@ -226,8 +193,15 @@
     return foundAny ? data : null;
   }
 
+  function getRegistry() {
+    if (!cachedRegistry) {
+      cachedRegistry = GM_getValue("tw_empire_registry", {});
+    }
+    return cachedRegistry;
+  }
+
   function copySummaryToClipboard(fullData = false) {
-    const registry = GM_getValue("tw_empire_registry", {});
+    const registry = getRegistry();
     const info = getVillageInfo();
     const recordedIds = Object.keys(registry);
 
@@ -310,7 +284,7 @@
   function createCard() {
     if (document.getElementById("tw-empire-troop-card")) return;
 
-    const sideMenuContainer = document.querySelector('div.fixed.left-2.z-20, div.fixed.left-4.z-20');
+    const sideMenuContainer = getSideMenuContainer();
     if (!sideMenuContainer) return;
 
     const card = document.createElement("div");
@@ -363,7 +337,7 @@
   }
 
   function calculateAndRenderEmpireTotals() {
-    const registry = GM_getValue("tw_empire_registry", {});
+    const registry = getRegistry();
     const totals = { grandTotal: 0, categories: { def_inf: 0, def_cav: 0, scout: 0 }, villageList: [] };
 
     const ONE_HOUR = 60 * 60 * 1000;
@@ -424,20 +398,30 @@
     if (isUpkeepVisible()) {
       createCard();
       const activeCard = document.getElementById("tw-empire-troop-card");
-      if (activeCard) activeCard.style.display = "block";
+      if (activeCard && activeCard.style.display !== "block") {
+        activeCard.style.display = "block";
+      }
 
       const activeVillage = getVillageInfo();
       const liveData = parseTroopsFromDOM();
 
-      if (liveData !== null) {
-        const registry = GM_getValue("tw_empire_registry", {});
-        registry[activeVillage.id] = { name: activeVillage.name, updatedAt: Date.now(), data: liveData };
-        GM_setValue("tw_empire_registry", registry);
+      const currentSig = `${activeVillage.id}_${JSON.stringify(liveData)}`;
+
+      if (currentSig !== lastParsedSig) {
+        lastParsedSig = currentSig;
+
+        if (liveData !== null) {
+          const registry = getRegistry();
+          registry[activeVillage.id] = { name: activeVillage.name, updatedAt: Date.now(), data: liveData };
+          GM_setValue("tw_empire_registry", registry);
+        }
+        calculateAndRenderEmpireTotals();
       }
-      calculateAndRenderEmpireTotals();
     } else {
       const card = document.getElementById("tw-empire-troop-card");
-      if (card) card.style.display = "none";
+      if (card && card.style.display !== "none") {
+        card.style.display = "none";
+      }
     }
-  }, 500);
+  }, 1000);
 })();
