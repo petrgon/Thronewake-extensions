@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Multi-Column Growth & Strategic Intel
 // @namespace    http://tampermonkey.net/
-// @version      18.1
-// @description  High-performance leaderboard tracker with second-precision compact tuple storage [timestamp_sec, value], persistent modal time range selection across player views, parenthesized badge stripping, negative value support, table event delegation, short key aliasing, debounced Gist sync, 0% CPU mutation guard, server-speed scaled growth tracking, and Travian strategy modal.
+// @version      18.2
+// @description  High-performance leaderboard tracker with second-precision compact tuple storage, persistent modal time range selection, DOM mutation guards, conditional local storage writes, and scoped mutation targets.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -416,7 +416,7 @@
     function findLeaderboardTable() {
         const tables = document.querySelectorAll('table, [role="table"]');
         for (let i = 0; i < tables.length; i++) {
-            if (tables[i].querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="/p/"], a[href*="/map/alliance/"')) {
+            if (tables[i].querySelector('a[href*="player"], a[href*="user"], a[href*="profile"], a[href*="/p/"], a[href*="/map/alliance/"]')) {
                 return tables[i];
             }
         }
@@ -573,6 +573,7 @@
 
                 const stats = getSpeedScaledGrowthStats(catHistory, currentValue);
                 const momentumSymbol = stats.symbol ? ` ${stats.symbol}` : '';
+                const badgeText = `(${stats.percentText}${momentumSymbol})`;
                 const gain1DayFormatted = formatCompact(stats.gain1Day, true);
                 const gain3DaysFormatted = formatCompact(stats.gain3Days, true);
 
@@ -586,32 +587,42 @@
 
                 const container = targetTd.querySelector('div.flex, div, span') || targetTd;
                 let badge = container.querySelector('.tw-growth-badge');
+
                 if (!badge) {
                     badge = document.createElement('span');
                     badge.className = 'tw-growth-badge';
                     container.appendChild(badge);
                 }
 
-                badge.dataset.player = playerName;
-                badge.dataset.key = m.key;
-                badge.dataset.label = m.label;
-                badge.dataset.val = currentValue;
-
-                badge.style.cssText = `font-size: 11px; font-weight: 400; margin-left: 3px; display: inline-block; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; font-variant-emoji: text; ${stats.colorStyle}`;
-                badge.textContent = `(${stats.percentText}${momentumSymbol})`;
-                badge.title = tooltipText;
+                // Guard against redundant DOM updates
+                if (badge.textContent !== badgeText) {
+                    badge.dataset.player = playerName;
+                    badge.dataset.key = m.key;
+                    badge.dataset.label = m.label;
+                    badge.dataset.val = currentValue;
+                    badge.style.cssText = `font-size: 11px; font-weight: 400; margin-left: 3px; display: inline-block; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; font-variant-emoji: text; ${stats.colorStyle}`;
+                    badge.textContent = badgeText;
+                    badge.title = tooltipText;
+                }
             });
         });
 
-        saveLocalHistory();
-        if (hasNewData && isGistLoaded && !isAlliancePage) pushToGistDebounced();
+        // Guard against writing to localStorage unless new data was tracked
+        if (hasNewData) {
+            saveLocalHistory();
+            if (isGistLoaded && !isAlliancePage) pushToGistDebounced();
+        }
+    }
+
+    function getObserverTarget() {
+        return document.querySelector('main') || document.querySelector('#app') || document.querySelector('#content') || document.body;
     }
 
     function runDOMPass() {
         if (observer) observer.disconnect();
         injectConfigButton();
         processTable();
-        if (observer) observer.observe(document.body, { childList: true, subtree: true });
+        if (observer) observer.observe(getObserverTarget(), { childList: true, subtree: true });
     }
 
     function openTrendModal(playerName, metricKey, metricLabel, currentValue) {
@@ -737,7 +748,6 @@
             });
         }
 
-        // Maintain user's last selected chart range preference across modal opens
         const rangeBtns = document.querySelectorAll('#tw-chart-range-btns button');
         rangeBtns.forEach(btn => {
             const btnDays = parseInt(btn.getAttribute('data-days'), 10);
@@ -781,14 +791,13 @@
             if (existingBtn) existingBtn.remove();
             return;
         }
-        // Prevent duplicate injections
         if (document.getElementById('tw-growth-gist-config-btn')) return;
 
         const backBtn = document.querySelector('.lucide-arrow-left')?.closest('button');
         if (!backBtn) return;
 
         const cfgBtn = document.createElement('button');
-        cfgBtn.id = 'tw-growth-gist-config-btn'; // Unique ID
+        cfgBtn.id = 'tw-growth-gist-config-btn';
         cfgBtn.type = 'button';
         cfgBtn.className = backBtn.className;
         cfgBtn.title = 'Configure Growth Tracker';
@@ -978,6 +987,6 @@
         timeout = setTimeout(() => { runDOMPass(); }, 150);
     });
 
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(getObserverTarget(), { childList: true, subtree: true });
     setTimeout(() => { runDOMPass(); }, 300);
 })();
