@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Map Travel Time Calculator
 // @namespace    http://tampermonkey.net/
-// @version      6.0
-// @description  Calculates distance, travel durations, and UTC arrival times on Thronewake. Features clean bottom-right touch/mouse resizing and non-intrusive target picking.
+// @version      6.1
+// @description  Calculates distance, travel durations, and UTC arrival times on Thronewake with CPU and DOM optimizations.
 // @author       petrgon
 // @match        https://www.thronewake.com/*
 // @grant        GM_setValue
@@ -235,28 +235,23 @@
 
         if (!tileEl) {
             if (marker) {
-              resetCellZIndex(marker.parentElement);
-              marker.remove();
-              marker = null;
+                resetCellZIndex(marker.parentElement);
+                marker.remove();
             }
-
             return;
         }
 
-        if (marker && marker.parentElement && marker.parentElement !== tileEl) {
+        if (marker && marker.parentElement === tileEl) return;
+
+        if (marker && marker.parentElement) {
             resetCellZIndex(marker.parentElement);
             marker.remove();
-            marker = null;
         }
 
         const gridCell = tileEl.closest('[role="gridcell"]') || tileEl.parentElement;
         if (gridCell) gridCell.style.zIndex = '9999';
         tileEl.style.zIndex = '9999';
-
-        const computedPos = window.getComputedStyle(tileEl).position;
-        if (computedPos === 'static') tileEl.style.position = 'relative';
-
-        if (marker && marker.parentElement === tileEl) return;
+        tileEl.style.position = 'relative';
 
         marker = document.createElement('div');
         marker.id = markerId;
@@ -614,7 +609,6 @@
             element.style.height = `${newH}px`;
         };
 
-        // Touch handling
         handle.addEventListener('touchstart', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -636,7 +630,6 @@
             document.addEventListener('touchend', onTouchEnd);
         }, { passive: false });
 
-        // Mouse handling
         handle.addEventListener('mousedown', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -704,39 +697,35 @@
     }
 
     function extractCoordsFromEvent(e) {
-      const clickX = e.clientX;
-      const clickY = e.clientY;
+        const clickX = e.clientX;
+        const clickY = e.clientY;
 
-      // 1. Get all tile container divs on the map
-      const tileDivs = document.querySelectorAll('[class*="@container/tile"]');
+        const tileDivs = document.querySelectorAll('[class*="@container/tile"]');
 
-      // 2. Find which tile div visually contains the click point
-      for (const tile of tileDivs) {
-        const rect = tile.getBoundingClientRect();
+        for (const tile of tileDivs) {
+            const rect = tile.getBoundingClientRect();
 
-        if (
-          clickX >= rect.left &&
-          clickX <= rect.right &&
-          clickY >= rect.top &&
-          clickY <= rect.bottom
-        ) {
-          // 3. Extract aria-label or text from the inner button
-          const button = tile.querySelector('button');
-          if (button) {
-            const ariaLabel = button.getAttribute('aria-label') || '';
+            if (
+                clickX >= rect.left &&
+                clickX <= rect.right &&
+                clickY >= rect.top &&
+                clickY <= rect.bottom
+            ) {
+                const button = tile.querySelector('button');
+                if (button) {
+                    const ariaLabel = button.getAttribute('aria-label') || '';
 
-            // Match "Map tile at X, Y" or fallback text "(-X|-Y)"
-            const match = ariaLabel.match(/Map tile at\s*(-?\d+),\s*(-?\d+)/i) ||
-                          button.textContent.match(/\((-?\d+)\|(-?\d+)\)/);
+                    const match = ariaLabel.match(/Map tile at\s*(-?\d+),\s*(-?\d+)/i) ||
+                                  button.textContent.match(/\((-?\d+)\|(-?\d+)\)/);
 
-            if (match) {
-              return { x: parseInt(match[1], 10), y: parseInt(match[2], 10) };
+                    if (match) {
+                        return { x: parseInt(match[1], 10), y: parseInt(match[2], 10) };
+                    }
+                }
             }
-          }
         }
-      }
 
-      return null;
+        return null;
     }
 
     function setupMapClickListener() {
@@ -769,8 +758,6 @@
             e.stopPropagation();
             e.stopImmediatePropagation();
 
-
-            console.log(coords);
             if (coords) {
                 if (pickingMode === 'src') {
                     document.getElementById('tw-src-x').value = coords.x;
@@ -792,18 +779,20 @@
                 }
 
                 updateCalculations();
-
-                setTimeout(renderMapMarkers, 50);
-                setTimeout(renderMapMarkers, 150);
-                setTimeout(renderMapMarkers, 300);
+                renderMapMarkers();
             }
         }, true);
 
+        let mapObsTimeout = null;
+        const targetContainer = document.querySelector('main') || document.querySelector('#app') || document.body;
         const observer = new MutationObserver(() => {
-            checkRouteVisibility();
-            if (isMapRoute()) renderMapMarkers();
+            if (mapObsTimeout) clearTimeout(mapObsTimeout);
+            mapObsTimeout = setTimeout(() => {
+                checkRouteVisibility();
+                if (isMapRoute()) renderMapMarkers();
+            }, 200);
         });
-        observer.observe(document.body, { childList: true, subtree: true });
+        observer.observe(targetContainer, { childList: true, subtree: true });
     }
 
     function updateCalculations() {
@@ -863,24 +852,22 @@
             tbody.appendChild(tr);
         });
 
-         // Ensure only one global timer runs across all elements
         if (window.travelTimerInterval) {
-          clearInterval(window.travelTimerInterval);
+            clearInterval(window.travelTimerInterval);
         }
 
         window.travelTimerInterval = setInterval(() => {
-          const cells = document.querySelectorAll('.travel-eta-cell');
-          if (cells.length === 0) return;
+            const cells = document.querySelectorAll('.travel-eta-cell');
+            if (cells.length === 0) return;
 
-          const now = Date.now();
-
-          cells.forEach(cell => {
-            const totalSeconds = parseInt(cell.dataset.totalSeconds, 10);
-            if (!isNaN(totalSeconds)) {
-              cell.textContent = formatArrivalTimeUTC(totalSeconds);
-            }
-          });
+            cells.forEach(cell => {
+                const totalSeconds = parseInt(cell.dataset.totalSeconds, 10);
+                if (!isNaN(totalSeconds)) {
+                    cell.textContent = formatArrivalTimeUTC(totalSeconds);
+                }
+            });
         }, 1000);
+
         renderMapMarkers();
     }
 
