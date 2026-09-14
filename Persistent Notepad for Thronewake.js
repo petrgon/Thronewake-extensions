@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Top-Left Persistent Notepad (Mobile Drag & Resize)
 // @namespace    violentmonkey-persistent-notes
-// @version      4.6
-// @description  Per-village persistent notes synced with GitHub Gist. Features full mobile touch drag, touch resize handle, and settings modal.
+// @version      4.7
+// @description  Per-village persistent notes synced with GitHub Gist. Features full mobile touch drag, touch resize handle, settings modal, and zero-idle CPU optimizations.
 // @match        *://*.thronewake.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -451,7 +451,7 @@
     if (activeVillage.id !== currentVillage.id) {
       loadVillageNotes(activeVillage);
     }
-  }, 500);
+  }, 1000);
 
   toggleBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -460,19 +460,20 @@
     GM_setValue("pn_minimized", minState);
   });
 
-  // TOUCH & MOUSE DRAGGING LOGIC
+  // DYNAMIC TOUCH & MOUSE DRAGGING LOGIC
   let isDragging = false, dragOffsetX = 0, dragOffsetY = 0;
 
-  function startDrag(clientX, clientY) {
-    isDragging = true;
-    dragOffsetX = clientX - container.offsetLeft;
-    dragOffsetY = clientY - container.offsetTop;
+  function onMouseMoveDrag(e) {
+    if (!isDragging) return;
+    container.style.left = Math.max(0, e.clientX - dragOffsetX) + "px";
+    container.style.top = Math.max(0, e.clientY - dragOffsetY) + "px";
   }
 
-  function moveDrag(clientX, clientY) {
+  function onTouchMoveDrag(e) {
     if (!isDragging) return;
-    container.style.left = Math.max(0, clientX - dragOffsetX) + "px";
-    container.style.top = Math.max(0, clientY - dragOffsetY) + "px";
+    e.preventDefault();
+    container.style.left = Math.max(0, e.touches[0].clientX - dragOffsetX) + "px";
+    container.style.top = Math.max(0, e.touches[0].clientY - dragOffsetY) + "px";
   }
 
   function stopDrag() {
@@ -481,6 +482,20 @@
       GM_setValue("pn_top", container.style.top);
       GM_setValue("pn_left", container.style.left);
     }
+    document.removeEventListener("mousemove", onMouseMoveDrag);
+    document.removeEventListener("touchmove", onTouchMoveDrag);
+    document.removeEventListener("mouseup", stopDrag);
+    document.removeEventListener("touchend", stopDrag);
+  }
+
+  function startDrag(clientX, clientY) {
+    isDragging = true;
+    dragOffsetX = clientX - container.offsetLeft;
+    dragOffsetY = clientY - container.offsetTop;
+    document.addEventListener("mousemove", onMouseMoveDrag);
+    document.addEventListener("touchmove", onTouchMoveDrag, { passive: false });
+    document.addEventListener("mouseup", stopDrag);
+    document.addEventListener("touchend", stopDrag);
   }
 
   header.addEventListener("mousedown", (e) => {
@@ -494,32 +509,22 @@
     startDrag(touch.clientX, touch.clientY);
   }, { passive: true });
 
-  document.addEventListener("mousemove", (e) => moveDrag(e.clientX, e.clientY));
-  document.addEventListener("touchmove", (e) => {
-    if (isDragging) {
-      e.preventDefault();
-      moveDrag(e.touches[0].clientX, e.touches[0].clientY);
-    }
-  }, { passive: false });
-
-  document.addEventListener("mouseup", stopDrag);
-  document.addEventListener("touchend", stopDrag);
-
-  // TOUCH & MOUSE RESIZING LOGIC
+  // DYNAMIC TOUCH & MOUSE RESIZING LOGIC
   let isResizing = false, resizeStartW = 0, resizeStartH = 0, resizeStartX = 0, resizeStartY = 0;
 
-  function startResize(clientX, clientY) {
-    isResizing = true;
-    resizeStartX = clientX;
-    resizeStartY = clientY;
-    resizeStartW = container.offsetWidth;
-    resizeStartH = container.offsetHeight;
+  function onMouseMoveResize(e) {
+    if (!isResizing) return;
+    const newW = Math.max(180, resizeStartW + (e.clientX - resizeStartX));
+    const newH = Math.max(100, resizeStartH + (e.clientY - resizeStartY));
+    container.style.width = newW + "px";
+    container.style.height = newH + "px";
   }
 
-  function moveResize(clientX, clientY) {
+  function onTouchMoveResize(e) {
     if (!isResizing) return;
-    const newW = Math.max(180, resizeStartW + (clientX - resizeStartX));
-    const newH = Math.max(100, resizeStartH + (clientY - resizeStartY));
+    e.preventDefault();
+    const newW = Math.max(180, resizeStartW + (e.touches[0].clientX - resizeStartX));
+    const newH = Math.max(100, resizeStartH + (e.touches[0].clientY - resizeStartY));
     container.style.width = newW + "px";
     container.style.height = newH + "px";
   }
@@ -530,6 +535,22 @@
       GM_setValue("pn_width", container.style.width);
       GM_setValue("pn_height", container.style.height);
     }
+    document.removeEventListener("mousemove", onMouseMoveResize);
+    document.removeEventListener("touchmove", onTouchMoveResize);
+    document.removeEventListener("mouseup", stopResize);
+    document.removeEventListener("touchend", stopResize);
+  }
+
+  function startResize(clientX, clientY) {
+    isResizing = true;
+    resizeStartX = clientX;
+    resizeStartY = clientY;
+    resizeStartW = container.offsetWidth;
+    resizeStartH = container.offsetHeight;
+    document.addEventListener("mousemove", onMouseMoveResize);
+    document.addEventListener("touchmove", onTouchMoveResize, { passive: false });
+    document.addEventListener("mouseup", stopResize);
+    document.addEventListener("touchend", stopResize);
   }
 
   resizeHandle.addEventListener("mousedown", (e) => {
@@ -542,15 +563,4 @@
     const touch = e.touches[0];
     startResize(touch.clientX, touch.clientY);
   }, { passive: true });
-
-  document.addEventListener("mousemove", (e) => moveResize(e.clientX, e.clientY));
-  document.addEventListener("touchmove", (e) => {
-    if (isResizing) {
-      e.preventDefault();
-      moveResize(e.touches[0].clientX, e.touches[0].clientY);
-    }
-  }, { passive: false });
-
-  document.addEventListener("mouseup", stopResize);
-  document.addEventListener("touchend", stopResize);
 })();
