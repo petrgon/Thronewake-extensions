@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      7.6
-// @description  Parses village income and trade routes with zoomable/pannable SVG map visualization, configurable center zone radius, non-scaling labels/lines on zoom, target income tracking, strict header scraping protection, deferred modal rendering, and memory/CPU optimization.
+// @version      8.2
+// @description  Parses village income and trade routes with zoomable/pannable SVG map visualization, configurable center zone radius, non-scaling labels/lines on zoom, target income tracking, strict header scraping protection, deferred modal rendering, lazy-load DOM mutation observer, non-mutating route highlight fix, and memory/CPU optimization.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
 // @grant        GM_setValue
@@ -21,6 +21,7 @@
     let headerScrapeTimer = null;
     let observerDebounceTimer = null;
     let lastSavedJson = '';
+    let lastParsedRouteSig = '';
 
     // --- Pan & Zoom State ---
     let transformState = {
@@ -369,6 +370,9 @@
             if (parsedCount === 'loading' || parsedCount === -1) {
                 statusEl.textContent = `⏳ Loading routes...`;
                 statusEl.style.color = '#f59e0b';
+            } else if (parsedCount === 'not_present') {
+                statusEl.textContent = `📦 Stored: ${state.routes.length}`;
+                statusEl.style.color = '#e8d8b7';
             } else if (typeof parsedCount === 'number') {
                 statusEl.textContent = `✓ Parsed ${parsedCount} (Total: ${state.routes.length})`;
                 statusEl.style.color = '#28a745';
@@ -411,13 +415,22 @@
             headerScrapeTimer = null;
         }
 
-        const activeVillageEl = document.querySelector('#_r_d_-select span') || document.querySelector('select[aria-label="Switch village"] option:checked');
-        let text = activeVillageEl ? activeVillageEl.textContent.trim() : '';
+        let activeVillageEl = document.querySelector('header [role="combobox"] span') ||
+                              document.querySelector('header select option:checked') ||
+                              document.querySelector('select[aria-label*="village" i] option:checked');
 
-        let coordMatch = text.match(/^(.*?)\s*\(([-+]?\d+)\|([-+]?\d+)\)$/);
-        if (!coordMatch) {
-            coordMatch = document.body.innerText.match(/([^\n\r(|]+)\s*\(([-+]?\d+)\|([-+]?\d+)\)/);
+        if (!activeVillageEl) {
+            const headerCandidates = document.querySelectorAll('header div, header span, header h1, header h2, header button');
+            for (const el of headerCandidates) {
+                if (el.children.length <= 3 && /\([-+]?\d+\|[-+]?\d+\)/.test(el.textContent)) {
+                    activeVillageEl = el;
+                    break;
+                }
+            }
         }
+
+        let text = activeVillageEl ? activeVillageEl.textContent.trim() : '';
+        let coordMatch = text.match(/^(.*?)\s*\(([-+]?\d+)\|([-+]?\d+)\)$/);
 
         if (!coordMatch) return null;
 
@@ -430,30 +443,18 @@
         const existingReq = getVillageRequiredIncome(state.villages[key] || {});
 
         if (headerRates) {
-            if (!state.villages[key]) {
-                state.villages[key] = {
-                    id: name,
-                    name: name,
-                    x: x,
-                    y: y,
-                    wood: headerRates.wood,
-                    clay: headerRates.clay,
-                    iron: headerRates.iron,
-                    crop: headerRates.crop,
-                    requiredIncome: existingReq,
-                    isPlaceholder: false,
-                    lastSeen: Date.now()
-                };
-            } else {
-                state.villages[key].id = name;
-                state.villages[key].name = name;
-                state.villages[key].wood = headerRates.wood;
-                state.villages[key].clay = headerRates.clay;
-                state.villages[key].iron = headerRates.iron;
-                state.villages[key].crop = headerRates.crop;
-                state.villages[key].isPlaceholder = false;
-                state.villages[key].lastSeen = Date.now();
-            }
+            state.villages[key] = {
+                id: name,
+                name: name,
+                x: x, y: y,
+                wood: headerRates.wood,
+                clay: headerRates.clay,
+                iron: headerRates.iron,
+                crop: headerRates.crop,
+                requiredIncome: existingReq,
+                isPlaceholder: false,
+                lastSeen: Date.now()
+            };
             saveState(state);
             render();
         } else {
@@ -465,12 +466,8 @@
                 state.villages[key] = {
                     id: name,
                     name: name,
-                    x: x,
-                    y: y,
-                    wood: 0,
-                    clay: 0,
-                    iron: 0,
-                    crop: 0,
+                    x: x, y: y,
+                    wood: 0, clay: 0, iron: 0, crop: 0,
                     requiredIncome: existingReq,
                     isPlaceholder: true,
                     lastSeen: Date.now()
@@ -492,30 +489,69 @@
         return null;
     }
 
-    function scrapeTradeRoutesFromDOM() {
+    function parseResourcesFromCard(card) {
+        let wood = 0, clay = 0, iron = 0, crop = 0;
+        const srLabels = card.querySelectorAll('.sr-only');
+
+        srLabels.forEach(sr => {
+            const label = sr.textContent.trim().toLowerCase();
+            if (['lumber', 'wood', 'stone', 'clay', 'metal', 'iron', 'food', 'crop'].includes(label)) {
+                const container = sr.closest('div') || sr.parentElement;
+                if (container) {
+                    const clone = container.cloneNode(true);
+                    const srInClone = clone.querySelector('.sr-only');
+                    if (srInClone) srInClone.remove();
+
+                    const numMatch = clone.textContent.match(/([\d,]+)/);
+                    if (numMatch) {
+                        const val = parseInt(numMatch[1].replace(/,/g, ''), 10);
+                        if (!isNaN(val)) {
+                            if (label === 'lumber' || label === 'wood') wood += val;
+                            else if (label === 'stone' || label === 'clay') clay += val;
+                            else if (label === 'metal' || label === 'iron') iron += val;
+                            else if (label === 'food' || label === 'crop') crop += val;
+                        }
+                    }
+                }
+            }
+        });
+
+        return { wood, clay, iron, crop };
+    }
+
+    function scrapeTradeRoutesFromDOM(forceReparse = false) {
         const origin = scrapePageVillageData();
-        if (!origin) return 0;
+        if (!origin) return 'not_present';
 
         const header = findTradeRoutesHeader();
-        if (!header) return 0;
+        if (!header) return 'not_present';
 
         const section = header.closest('section');
-        if (!section) return 0;
+        if (!section) return 'not_present';
 
-        const ulEl = section.querySelector('ul');
-        const directDivs = section.querySelectorAll(':scope > div');
+        const sectionText = section.textContent || '';
+        const isStillLoadingText = /Loading\s+trade\s+routes/i.test(sectionText);
 
-        const isStillLoading = !ulEl && (
-            /Loading\s+trade\s+routes/i.test(section.textContent) ||
-            directDivs.length > 1
-        );
+        const routesUsedMatch = sectionText.match(/Routes\s+used:\s*(\d+)\s*\/\s*(\d+)/i);
+        const expectedCount = routesUsedMatch ? parseInt(routesUsedMatch[1], 10) : null;
+
+        const allLis = section.querySelectorAll('li');
+        const routeCards = Array.from(allLis).filter(li => li.querySelector('a[href*="/map/tile/"]'));
+
+        const isStillLoading = isStillLoadingText || (expectedCount !== null && expectedCount > 0 && routeCards.length < expectedCount);
 
         if (isStillLoading) {
             updateRouteStatusBadge('loading');
             return -1;
         }
 
-        const routeCards = ulEl ? ulEl.querySelectorAll('li.paper:has(input[name^="route-enabled"]), li.paper:has(input[type="checkbox"])') : [];
+        const currentSig = `${origin.x}_${origin.y}_${routeCards.length}_${routeCards.map(c => c.textContent).join('|')}`;
+        if (!forceReparse && currentSig === lastParsedRouteSig) {
+            const currentOriginRoutes = state.routes.filter(r => r.fromX === origin.x && r.fromY === origin.y);
+            return currentOriginRoutes.length;
+        }
+
+        lastParsedRouteSig = currentSig;
         const foundRoutes = [];
 
         routeCards.forEach((card, cardIdx) => {
@@ -568,30 +604,12 @@
 
             const hourlyMultiplier = deliveries / (repeatHours || 1);
 
-            let wood = 0, clay = 0, iron = 0, crop = 0;
-            const resBoxes = card.querySelectorAll('div.flex.items-center.gap-1');
+            const parsedRes = parseResourcesFromCard(card);
 
-            resBoxes.forEach(box => {
-                const srLabel = box.querySelector('.sr-only');
-                const valSpan = box.querySelector('span:not(.sr-only)');
-
-                if (srLabel && valSpan) {
-                    const label = srLabel.textContent.trim().toLowerCase();
-                    const val = parseInt(valSpan.textContent.replace(/,/g, ''), 10);
-
-                    if (!isNaN(val)) {
-                        if (label === 'lumber' || label === 'wood') wood += val;
-                        else if (label === 'stone' || label === 'clay') clay += val;
-                        else if (label === 'metal' || label === 'iron') iron += val;
-                        else if (label === 'food' || label === 'crop') crop += val;
-                    }
-                }
-            });
-
-            const hourlyWood = Math.round(wood * hourlyMultiplier);
-            const hourlyClay = Math.round(clay * hourlyMultiplier);
-            const hourlyIron = Math.round(iron * hourlyMultiplier);
-            const hourlyCrop = Math.round(crop * hourlyMultiplier);
+            const hourlyWood = Math.round(parsedRes.wood * hourlyMultiplier);
+            const hourlyClay = Math.round(parsedRes.clay * hourlyMultiplier);
+            const hourlyIron = Math.round(parsedRes.iron * hourlyMultiplier);
+            const hourlyCrop = Math.round(parsedRes.crop * hourlyMultiplier);
 
             const routeId = `route_${origin.x}_${origin.y}_to_${toX}_${toY}_idx_${cardIdx}`;
             foundRoutes.push({
@@ -607,10 +625,10 @@
                 crop: hourlyCrop,
                 repeatHours: repeatHours,
                 deliveries: deliveries,
-                rawWood: wood,
-                rawClay: clay,
-                rawIron: iron,
-                rawCrop: crop
+                rawWood: parsedRes.wood,
+                rawClay: parsedRes.clay,
+                rawIron: parsedRes.iron,
+                rawCrop: parsedRes.crop
             });
         });
 
@@ -684,7 +702,7 @@
                 }
 
                 setTimeout(() => {
-                    const count = scrapeTradeRoutesFromDOM();
+                    const count = scrapeTradeRoutesFromDOM(true);
                     updateRouteStatusBadge(count);
                     render();
                 }, 200);
@@ -1378,10 +1396,20 @@
 
         let lastObservedVillage = '';
 
-        // Target Main Container to minimize observer CPU cycles
         const targetNode = document.querySelector('main') || document.querySelector('#app') || document.body;
 
-        const observer = new MutationObserver(() => {
+        const observer = new MutationObserver((mutations) => {
+            // Guard: ignore DOM mutations originating from script's own UI elements
+            const isSelfMutation = mutations.every(m => {
+                const target = m.target;
+                return target.closest && (
+                    target.closest('#tw-modal-overlay') ||
+                    target.closest('#tw-route-controls-wrap') ||
+                    target.closest('#tw-graph-btn')
+                );
+            });
+            if (isSelfMutation) return;
+
             if (observerDebounceTimer) return;
 
             observerDebounceTimer = setTimeout(() => {
@@ -1389,16 +1417,20 @@
                 injectHeaderButton();
                 injectTradeRouteControls();
 
-                const selectEl = document.querySelector('#_r_d_-select');
+                const selectEl = document.querySelector('header [role="combobox"] span') || document.querySelector('header select option:checked');
                 if (selectEl) {
                     const currentText = selectEl.textContent.trim();
                     if (currentText !== lastObservedVillage) {
                         lastObservedVillage = currentText;
+                        lastParsedRouteSig = '';
                         scrapePageVillageData();
-                        const parsedCount = scrapeTradeRoutesFromDOM();
-                        updateRouteStatusBadge(parsedCount);
-                        render();
                     }
+                }
+
+                if (findTradeRoutesHeader()) {
+                    const parsedCount = scrapeTradeRoutesFromDOM();
+                    updateRouteStatusBadge(parsedCount);
+                    render();
                 }
             }, 250);
         });
@@ -1413,7 +1445,7 @@
     function injectHeaderButton() {
         if (document.getElementById('tw-graph-btn')) return;
 
-        const selectEl = document.querySelector('#_r_d_-select');
+        const selectEl = document.querySelector('header [role="combobox"] span') || document.querySelector('header select option:checked');
         let targetEl = null;
 
         if (selectEl) {
@@ -1421,9 +1453,9 @@
         }
 
         if (!targetEl) {
-            const candidates = document.querySelectorAll('div, span, h1, h2, h3');
+            const candidates = document.querySelectorAll('header div, header span, header h1, header h2, header button');
             for (const el of candidates) {
-                if (el.children.length <= 2 && /\([-+]?\d+\|[-+]?\d+\)/.test(el.textContent)) {
+                if (el.children.length <= 3 && /\([-+]?\d+\|[-+]?\d+\)/.test(el.textContent)) {
                     targetEl = el;
                     break;
                 }
@@ -1479,10 +1511,10 @@
                 incCrop += (r.crop || 0);
             }
             if (r.fromX === v.x && r.fromY === v.y) {
-                outWood -= (r.wood || 0);
-                outClay -= (r.clay || 0);
-                outIron -= (r.iron || 0);
-                outCrop -= (r.crop || 0);
+                outWood += (r.wood || 0);
+                outClay += (r.clay || 0);
+                outIron += (r.iron || 0);
+                outCrop += (r.crop || 0);
             }
         });
 
@@ -1520,7 +1552,7 @@
 
     function render() {
         const overlay = document.getElementById('tw-modal-overlay');
-        // Deferred Render Optimization: skip building SVG DOM while modal is hidden
+
         if (overlay && overlay.style.display === 'none') return;
 
         const villages = Object.values(state.villages);
@@ -1532,7 +1564,6 @@
 
         if (!svg || !container || !sidebarList) return;
 
-        // Clean up detached listeners before wiping innerHTML to prevent memory leaks
         svg.querySelectorAll('*').forEach(el => {
             el.onmousemove = null;
             el.onmouseleave = null;
@@ -1643,18 +1674,18 @@
         const routeDomMap = new Map();
 
         function activateRouteHighlight(path, arrow) {
-            routesGroupElement.querySelectorAll('.tw-route-path, .tw-route-arrow').forEach(p => p.style.opacity = '0.25');
+            routesGroupElement.querySelectorAll('.tw-route-path, .tw-route-arrow').forEach(p => p.style.opacity = '0.2');
             path.style.opacity = '1';
-            arrow.style.opacity = '1';
             path.setAttribute('stroke-width', '5');
-            routesGroupElement.appendChild(path);
-            routesGroupElement.appendChild(arrow);
+            arrow.style.opacity = '1';
         }
 
         function deactivateRouteHighlight() {
             routesGroupElement.querySelectorAll('.tw-route-path, .tw-route-arrow').forEach(p => {
                 p.style.opacity = '1';
-                p.setAttribute('stroke-width', '3');
+                if (p.classList.contains('tw-route-path')) {
+                    p.setAttribute('stroke-width', '3');
+                }
             });
             deactivateTooltip();
         }
