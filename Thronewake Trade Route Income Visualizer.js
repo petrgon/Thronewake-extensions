@@ -1,4 +1,34 @@
-// ==UserScript==
+nction getVillageTooltipHtml(v) {
+        let incWood = 0, incClay = 0, incIron = 0, incCrop = 0;
+        let outWood = 0, outClay = 0, outIron = 0, outCrop = 0;
+
+        state.routes.forEach(r => {
+            if (r.toX === v.x && r.toY === v.y) {
+                incWood += (r.wood || 0);
+                incClay += (r.clay || 0);
+                incIron += (r.iron || 0);
+                incCrop += (r.crop || 0);
+            }
+            if (r.fromX === v.x && r.fromY === v.y) {
+                outWood += (r.wood || 0); // Fixed: accumulate as positive value
+                outClay += (r.clay || 0);
+                outIron += (r.iron || 0);
+                outCrop += (r.crop || 0);
+            }
+        });
+
+        const req = getVillageRequiredIncome(v);
+
+        return `
+            <strong style="color:#fff">${v.name} (${v.x}|${v.y})</strong><br/>
+            ${formatResourceTooltipLine('🌲', 'Lumber', v.wood || 0, incWood, outWood, req.wood)}<br/>
+            ${formatResourceTooltipLine('🧱', 'Stone', v.clay || 0, incClay, outClay, req.clay)}<br/>
+            ${formatResourceTooltipLine('⛏️', 'Metal', v.iron || 0, incIron, outIron, req.iron)}<br/>
+            ${formatResourceTooltipLine('🥩', 'Food', v.crop || 0, incCrop, outCrop, req.crop)}<br/>
+            <hr style="border:0; border-top:1px solid #332e28; margin: 4px 0;"/>
+            <span style="font-size:10px; color:#ffc107;">Click village node to edit resource targets</span>
+        `;
+}// ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
 // @version      8.2
