@@ -5,6 +5,8 @@ function registerHeaderTool(toolConfig) {
         tools: [],
         stylesInjected: false,
         observerStarted: false,
+        isOpen: false,
+        debounceTimer: null,
 
         injectStyles() {
             if (this.stylesInjected) return;
@@ -14,6 +16,8 @@ function registerHeaderTool(toolConfig) {
                     display: inline-flex;
                     align-items: center;
                     margin-left: 8px;
+                    pointer-events: auto !important;
+                    z-index: 50;
                 }
                 .st-header-btn {
                     background: #165eb9;
@@ -29,6 +33,9 @@ function registerHeaderTool(toolConfig) {
                     display: inline-flex;
                     align-items: center;
                     gap: 4px;
+                    pointer-events: auto !important;
+                    user-select: none;
+                    transition: background-color 0.15s ease;
                 }
                 .st-header-btn:hover {
                     background: #1c6ed8;
@@ -47,6 +54,7 @@ function registerHeaderTool(toolConfig) {
                     flex-direction: column;
                     min-width: 140px;
                     overflow: hidden;
+                    pointer-events: auto !important;
                 }
                 .st-dropdown-box.hidden {
                     display: none !important;
@@ -62,6 +70,8 @@ function registerHeaderTool(toolConfig) {
                     cursor: pointer;
                     width: 100%;
                     transition: background 0.15s ease;
+                    pointer-events: auto !important;
+                    white-space: nowrap;
                 }
                 .st-dropdown-item:hover {
                     background: #2d2924;
@@ -86,12 +96,32 @@ function registerHeaderTool(toolConfig) {
             if (this.observerStarted) return;
             this.observerStarted = true;
 
-            const observer = new MutationObserver(() => {
-                const header = document.querySelector('header');
+            // Global click listener to close dropdown when clicking outside
+            document.addEventListener('click', (e) => {
                 const wrapper = document.getElementById('st-header-tools-wrapper');
-                if (header && !wrapper && this.tools.length > 0) {
-                    this.mount();
+                if (wrapper && !wrapper.contains(e.target)) {
+                    this.isOpen = false;
+                    const box = document.getElementById('st-dropdown-box');
+                    if (box) box.classList.add('hidden');
                 }
+            }, true);
+
+            const observer = new MutationObserver((mutations) => {
+                // Ignore self mutations originating from script UI
+                const isSelf = mutations.every(m => {
+                    const t = m.target;
+                    return t.closest && (t.closest('#st-header-tools-wrapper') || t.closest('#tw-modal-overlay'));
+                });
+                if (isSelf) return;
+
+                if (this.debounceTimer) return;
+                this.debounceTimer = setTimeout(() => {
+                    this.debounceTimer = null;
+                    const wrapper = document.getElementById('st-header-tools-wrapper');
+                    if (!wrapper || !document.body.contains(wrapper)) {
+                        this.mount();
+                    }
+                }, 150);
             });
 
             observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
@@ -111,21 +141,27 @@ function registerHeaderTool(toolConfig) {
             if (!header) return;
 
             let wrapper = document.getElementById('st-header-tools-wrapper');
-            if (!wrapper) {
+
+            // Reuse existing wrapper if already attached to DOM
+            if (wrapper && document.body.contains(wrapper)) {
+                if (wrapper.dataset.toolsCount === String(this.tools.length)) {
+                    return;
+                }
+            } else {
                 wrapper = document.createElement('div');
                 wrapper.id = 'st-header-tools-wrapper';
                 wrapper.className = 'st-header-tools-wrapper';
 
-                const targetContainer = header.querySelector('.relative.flex.items-center.justify-center') ||
-                                        header.querySelector('.relative.z-1.flex.justify-start') ||
-                                        header.querySelector('.paper') || header;
+                const selectEl = header.querySelector('[role="combobox"]') || header.querySelector('select');
+                let targetContainer = selectEl ? (selectEl.closest('.relative.flex') || selectEl.closest('div')) : null;
+                if (!targetContainer) {
+                    targetContainer = header.querySelector('.relative.flex.items-center') ||
+                                      header.querySelector('.paper') || header;
+                }
                 targetContainer.appendChild(wrapper);
-
-                document.addEventListener('click', (e) => {
-                    const box = document.getElementById('st-dropdown-box');
-                    if (box && !wrapper.contains(e.target)) box.classList.add('hidden');
-                });
             }
+
+            wrapper.dataset.toolsCount = String(this.tools.length);
 
             if (this.tools.length === 1) {
                 const single = this.tools[0];
@@ -136,6 +172,7 @@ function registerHeaderTool(toolConfig) {
                     </button>
                 `;
                 wrapper.querySelector('#st-header-tools-btn').onclick = (e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     single.onClick(e);
                 };
@@ -149,7 +186,7 @@ function registerHeaderTool(toolConfig) {
                         <span class="st-btn-desktop">Tools ▾</span>
                         <span class="st-btn-mobile">🛠️▾</span>
                     </button>
-                    <div id="st-dropdown-box" class="st-dropdown-box hidden">
+                    <div id="st-dropdown-box" class="st-dropdown-box ${this.isOpen ? '' : 'hidden'}">
                         ${itemsHtml}
                     </div>
                 `;
@@ -158,15 +195,19 @@ function registerHeaderTool(toolConfig) {
                 const box = wrapper.querySelector('#st-dropdown-box');
 
                 btn.onclick = (e) => {
+                    e.preventDefault();
                     e.stopPropagation();
-                    box.classList.toggle('hidden');
+                    this.isOpen = !this.isOpen;
+                    box.classList.toggle('hidden', !this.isOpen);
                 };
 
                 this.tools.forEach(t => {
                     const itemBtn = wrapper.querySelector(`#st-tool-item-${t.id}`);
                     if (itemBtn) {
                         itemBtn.onclick = (e) => {
+                            e.preventDefault();
                             e.stopPropagation();
+                            this.isOpen = false;
                             box.classList.add('hidden');
                             t.onClick(e);
                         };
