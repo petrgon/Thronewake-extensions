@@ -5,6 +5,7 @@
 // @description  Track and deduce target players' Safe Times from Rally Point troop arrival blocks with CPU optimizations.
 // @author       You
 // @match        *://*.thronewake.com/*
+// @require      https://cdn.jsdelivr.net/gh/petrgon/Thronewake-extensions@main/sharedlibrary.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
@@ -1226,71 +1227,14 @@
 
     // --- Header Menu Mount Logic ---
     function mountHeaderMenu() {
-        if (document.getElementById('st-header-tools-wrapper')) return;
-
-        const header = document.querySelector('header');
-        if (!header) return;
-
-        const toolsWrapper = document.createElement('div');
-        toolsWrapper.id = 'st-header-tools-wrapper';
-        toolsWrapper.className = 'st-header-tools-wrapper';
-
-        const targetContainer = header.querySelector('.relative.flex.items-center.justify-center') ||
-                                header.querySelector('.relative.z-1.flex.justify-start') ||
-                                header.querySelector('.paper');
-
-        if (targetContainer) {
-            targetContainer.appendChild(toolsWrapper);
-        } else {
-            header.appendChild(toolsWrapper);
-        }
-
-        const twGraphBtn = document.getElementById('tw-graph-btn');
-
-        if (twGraphBtn) {
-            toolsWrapper.innerHTML = `
-                <button id="st-header-tools-btn" type="button" class="st-header-btn">
-                    <span class="st-btn-desktop">Tools ▾</span>
-                    <span class="st-btn-mobile">🛠️▾</span>
-                </button>
-                <div id="st-dropdown-box" class="st-dropdown-box hidden">
-                    <button type="button" id="st-menu-item-st" class="st-dropdown-item">Safe Times</button>
-                </div>
-            `;
-
-            const dropdownBox = toolsWrapper.querySelector('#st-dropdown-box');
-            twGraphBtn.removeAttribute('style');
-            twGraphBtn.className = 'st-dropdown-item';
-            twGraphBtn.innerHTML = 'Trade Graph';
-            dropdownBox.appendChild(twGraphBtn);
-
-            const triggerBtn = toolsWrapper.querySelector('#st-header-tools-btn');
-            triggerBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                dropdownBox.classList.toggle('hidden');
-            });
-
-            toolsWrapper.querySelector('#st-menu-item-st').addEventListener('click', (e) => {
-                e.stopPropagation();
-                dropdownBox.classList.add('hidden');
+        registerHeaderTool({
+            id: 'safe-times',
+            label: 'Safe Times',
+            mobileIcon: '🛡️',
+            onClick: (e) => {
                 toggleModal();
-            });
-
-            twGraphBtn.addEventListener('click', () => {
-                dropdownBox.classList.add('hidden');
-            });
-        } else {
-            toolsWrapper.innerHTML = `
-                <button id="st-header-tools-btn" type="button" class="st-header-btn">
-                    <span class="st-btn-desktop">Safe Times</span>
-                    <span class="st-btn-mobile">🛡️</span>
-                </button>
-            `;
-            toolsWrapper.querySelector('#st-header-tools-btn').addEventListener('click', (e) => {
-                e.stopPropagation();
-                toggleModal();
-            });
-        }
+            }
+        });
     }
 
     document.addEventListener('click', (e) => {
