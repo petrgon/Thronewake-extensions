@@ -1,40 +1,11 @@
-nction getVillageTooltipHtml(v) {
-        let incWood = 0, incClay = 0, incIron = 0, incCrop = 0;
-        let outWood = 0, outClay = 0, outIron = 0, outCrop = 0;
-
-        state.routes.forEach(r => {
-            if (r.toX === v.x && r.toY === v.y) {
-                incWood += (r.wood || 0);
-                incClay += (r.clay || 0);
-                incIron += (r.iron || 0);
-                incCrop += (r.crop || 0);
-            }
-            if (r.fromX === v.x && r.fromY === v.y) {
-                outWood += (r.wood || 0); // Fixed: accumulate as positive value
-                outClay += (r.clay || 0);
-                outIron += (r.iron || 0);
-                outCrop += (r.crop || 0);
-            }
-        });
-
-        const req = getVillageRequiredIncome(v);
-
-        return `
-            <strong style="color:#fff">${v.name} (${v.x}|${v.y})</strong><br/>
-            ${formatResourceTooltipLine('🌲', 'Lumber', v.wood || 0, incWood, outWood, req.wood)}<br/>
-            ${formatResourceTooltipLine('🧱', 'Stone', v.clay || 0, incClay, outClay, req.clay)}<br/>
-            ${formatResourceTooltipLine('⛏️', 'Metal', v.iron || 0, incIron, outIron, req.iron)}<br/>
-            ${formatResourceTooltipLine('🥩', 'Food', v.crop || 0, incCrop, outCrop, req.crop)}<br/>
-            <hr style="border:0; border-top:1px solid #332e28; margin: 4px 0;"/>
-            <span style="font-size:10px; color:#ffc107;">Click village node to edit resource targets</span>
-        `;
-}// ==UserScript==
+// ==UserScript==
 // @name         Thronewake Trade Route & Income Visualizer
 // @namespace    https://www.thronewake.com/
-// @version      8.2
-// @description  Parses village income and trade routes with zoomable/pannable SVG map visualization, configurable center zone radius, non-scaling labels/lines on zoom, target income tracking, strict header scraping protection, deferred modal rendering, lazy-load DOM mutation observer, non-mutating route highlight fix, and memory/CPU optimization.
+// @version      8.7
+// @description  Parses village income and trade routes with zoomable/pannable SVG map visualization, configurable center zone radius, non-scaling labels/lines on zoom, target income tracking, strict header scraping protection, 350ms debounced rate/name change cancellation manager, mobile overlay popover fixes, 2-click village settings activation, deferred modal rendering, lazy-load DOM mutation observer, anti-flicker hit path guard, hidden inactive village filter, and memory/CPU optimization.
 // @author       Assistant
 // @match        https://*.thronewake.com/*
+// @require      https://cdn.jsdelivr.net/gh/petrgon/Thronewake-extensions@main/sharedlibrary.js
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
@@ -48,10 +19,25 @@ nction getVillageTooltipHtml(v) {
     const STORAGE_KEY = 'tw_auto_visualizer_data_v3';
     const GIST_FILENAME = 'thronewake_targets.json';
     let activeMobileItemId = null;
-    let headerScrapeTimer = null;
     let observerDebounceTimer = null;
     let lastSavedJson = '';
     let lastParsedRouteSig = '';
+
+    // --- Debounced Village Scrape & Cancellation State ---
+    let villageDebounceTimer = null;
+    let secondaryVerifyTimer = null;
+    let lastStableSig = '';
+
+    function cancelPendingScrapes() {
+        if (villageDebounceTimer) {
+            clearTimeout(villageDebounceTimer);
+            villageDebounceTimer = null;
+        }
+        if (secondaryVerifyTimer) {
+            clearTimeout(secondaryVerifyTimer);
+            secondaryVerifyTimer = null;
+        }
+    }
 
     // --- Pan & Zoom State ---
     let transformState = {
@@ -439,12 +425,8 @@ nction getVillageTooltipHtml(v) {
         return null;
     }
 
-    function scrapePageVillageData(attempt = 1) {
-        if (attempt === 1 && headerScrapeTimer) {
-            clearTimeout(headerScrapeTimer);
-            headerScrapeTimer = null;
-        }
-
+    // --- Debounced Village Scraper with Cancellation Manager ---
+    function scrapePageVillageData() {
         let activeVillageEl = document.querySelector('header [role="combobox"] span') ||
                               document.querySelector('header select option:checked') ||
                               document.querySelector('select[aria-label*="village" i] option:checked');
@@ -459,54 +441,72 @@ nction getVillageTooltipHtml(v) {
             }
         }
 
-        let text = activeVillageEl ? activeVillageEl.textContent.trim() : '';
-        let coordMatch = text.match(/^(.*?)\s*\(([-+]?\d+)\|([-+]?\d+)\)$/);
+        if (!activeVillageEl) return null;
 
+        const text = activeVillageEl.textContent.trim();
+        const coordMatch = text.match(/^(.*?)\s*\(([-+]?\d+)\|([-+]?\d+)\)$/);
         if (!coordMatch) return null;
+
+        const headerRates = extractHeaderRates();
+        const ratesSig = headerRates ? `${headerRates.wood}_${headerRates.clay}_${headerRates.iron}_${headerRates.crop}` : 'null';
+        const currentDomSig = `${text}::${ratesSig}`;
+
+        if (currentDomSig !== lastStableSig) {
+            cancelPendingScrapes();
+
+            villageDebounceTimer = setTimeout(() => {
+                villageDebounceTimer = null;
+
+                const freshRates = extractHeaderRates();
+                if (!freshRates) {
+                    cancelPendingScrapes();
+                    villageDebounceTimer = setTimeout(scrapePageVillageData, 350);
+                    return;
+                }
+
+                const name = coordMatch[1].trim();
+                const x = parseInt(coordMatch[2], 10);
+                const y = parseInt(coordMatch[3], 10);
+                const key = `${x},${y}`;
+                const existingReq = getVillageRequiredIncome(state.villages[key] || {});
+
+                lastStableSig = `${text}::${freshRates.wood}_${freshRates.clay}_${freshRates.iron}_${freshRates.crop}`;
+
+                state.villages[key] = {
+                    id: name,
+                    name: name,
+                    x: x, y: y,
+                    wood: freshRates.wood,
+                    clay: freshRates.clay,
+                    iron: freshRates.iron,
+                    crop: freshRates.crop,
+                    requiredIncome: existingReq,
+                    isPlaceholder: false,
+                    lastSeen: Date.now()
+                };
+
+                saveState(state);
+                render();
+
+                secondaryVerifyTimer = setTimeout(() => {
+                    secondaryVerifyTimer = null;
+                    const finalRates = extractHeaderRates();
+                    if (finalRates) {
+                        const finalSig = `${text}::${finalRates.wood}_${finalRates.clay}_${finalRates.iron}_${finalRates.crop}`;
+                        if (finalSig !== lastStableSig) {
+                            scrapePageVillageData();
+                        }
+                    }
+                }, 350);
+
+            }, 350);
+        }
 
         const name = coordMatch[1].trim();
         const x = parseInt(coordMatch[2], 10);
         const y = parseInt(coordMatch[3], 10);
         const key = `${x},${y}`;
-
-        const headerRates = extractHeaderRates();
-        const existingReq = getVillageRequiredIncome(state.villages[key] || {});
-
-        if (headerRates) {
-            state.villages[key] = {
-                id: name,
-                name: name,
-                x: x, y: y,
-                wood: headerRates.wood,
-                clay: headerRates.clay,
-                iron: headerRates.iron,
-                crop: headerRates.crop,
-                requiredIncome: existingReq,
-                isPlaceholder: false,
-                lastSeen: Date.now()
-            };
-            saveState(state);
-            render();
-        } else {
-            if (attempt < 5) {
-                headerScrapeTimer = setTimeout(() => {
-                    scrapePageVillageData(attempt + 1);
-                }, 400);
-            } else if (!state.villages[key]) {
-                state.villages[key] = {
-                    id: name,
-                    name: name,
-                    x: x, y: y,
-                    wood: 0, clay: 0, iron: 0, crop: 0,
-                    requiredIncome: existingReq,
-                    isPlaceholder: true,
-                    lastSeen: Date.now()
-                };
-                saveState(state);
-            }
-        }
-
-        return state.villages[key];
+        return state.villages[key] || null;
     }
 
     function findTradeRoutesHeader() {
@@ -716,7 +716,7 @@ nction getVillageTooltipHtml(v) {
                     font-size: 11px;
                     font-weight: bold;
                     box-shadow: 0 2px 4px rgba(0,0,0,0.4);
-                ">Reparse Routes</button>
+                ">🔄 <span class="tw-btn-text">Reparse Routes</span></button>
             `;
 
             header.appendChild(container);
@@ -835,7 +835,7 @@ nction getVillageTooltipHtml(v) {
                 display: flex; justify-content: space-between; align-items: center;
                 padding: 12px 20px; background: #141210; border-bottom: 1px solid var(--tw-paper-brown);
             }
-            .tw-body { display: flex; flex: 1; overflow: hidden; }
+            .tw-body { display: flex; flex: 1; overflow: hidden; position: relative; }
             .tw-sidebar {
                 width: 280px; background: #161412; padding: 15px;
                 border-right: 1px solid var(--tw-paper-brown); overflow-y: auto;
@@ -894,7 +894,7 @@ nction getVillageTooltipHtml(v) {
             }
 
             .tw-village-popover {
-                display: none; position: absolute; top: 50px; left: 12px; z-index: 100002;
+                display: none; position: absolute; top: 50px; left: 292px; z-index: 100002;
                 background: #141210; border: 2px solid var(--tw-paper-brown); padding: 18px;
                 border-radius: 6px; width: 380px; font-size: 12px; box-shadow: 0 8px 25px rgba(0,0,0,0.95);
             }
@@ -906,7 +906,7 @@ nction getVillageTooltipHtml(v) {
             }
 
             .tw-add-modal-popover {
-                display: none; position: absolute; top: 50px; left: 12px; z-index: 100001;
+                display: none; position: absolute; top: 50px; left: 292px; z-index: 100001;
                 background: #141210; border: 1px solid var(--tw-paper-brown); padding: 14px;
                 border-radius: 6px; width: 220px; font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.9);
             }
@@ -927,12 +927,16 @@ nction getVillageTooltipHtml(v) {
             .tw-del-btn:hover { color: #ff0000; }
 
             @media (max-width: 768px) {
+                .tw-btn-text {
+                    display: none !important;
+                }
                 .tw-modal {
                     width: 95vw;
                     height: 90vh;
                 }
                 .tw-body {
                     flex-direction: column;
+                    position: relative;
                 }
                 .tw-sidebar {
                     width: 100% !important;
@@ -942,6 +946,15 @@ nction getVillageTooltipHtml(v) {
                 }
                 .tw-canvas-container {
                     display: none !important;
+                }
+                .tw-village-popover, .tw-settings-popover, .tw-add-modal-popover {
+                    top: 10px !important;
+                    left: 50% !important;
+                    right: auto !important;
+                    transform: translateX(-50%) !important;
+                    width: 92% !important;
+                    max-width: 380px !important;
+                    z-index: 100005 !important;
                 }
             }
         `;
@@ -988,6 +1001,7 @@ nction getVillageTooltipHtml(v) {
         if (tooltip) tooltip.style.display = 'none';
     }
 
+    // --- Interactive Handler (1st Click = Tooltip, 2nd Click = Action/Modal) ---
     function handleInteractiveElement(el, itemId, navUrl, getTooltipContent, onActivate, onDeactivate, onClickAction) {
         el.onmousemove = (e) => {
             if (window.innerWidth > 768 && !transformState.isDragging) {
@@ -997,7 +1011,7 @@ nction getVillageTooltipHtml(v) {
         };
 
         el.onmouseleave = () => {
-            if (window.innerWidth > 768) {
+            if (window.innerWidth > 768 && activeMobileItemId !== itemId) {
                 if (onDeactivate) onDeactivate();
                 deactivateTooltip();
             }
@@ -1010,26 +1024,23 @@ nction getVillageTooltipHtml(v) {
                 return;
             }
 
-            if (onClickAction) {
-                e.preventDefault();
-                e.stopPropagation();
-                onClickAction(e);
-                return;
-            }
+            e.preventDefault();
+            e.stopPropagation();
 
-            if (isMobile(window)) {
-                if (activeMobileItemId !== itemId) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    activeMobileItemId = itemId;
-                    if (onActivate) onActivate();
-                    showTooltip(getTooltipContent(), e);
-                    return;
-                }
+            if (activeMobileItemId !== itemId) {
+                activeMobileItemId = itemId;
+                if (onActivate) onActivate();
+                showTooltip(getTooltipContent(), e);
+                return;
             }
 
             activeMobileItemId = null;
             deactivateTooltip();
+
+            if (onClickAction) {
+                onClickAction(e);
+                return;
+            }
 
             if (navUrl) {
                 window.location.href = navUrl;
@@ -1084,8 +1095,8 @@ nction getVillageTooltipHtml(v) {
                             background: #23201c; color: #888888; border: 1px solid #8c6d46;
                             padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;
                         ">⚪ Gist Off</span>
-                        <button id="tw-settings-btn" type="button">⚙️ Settings</button>
-                        <button id="tw-reset-btn" type="button">🗑️ Reset Data</button>
+                        <button id="tw-settings-btn" type="button">⚙️ <span class="tw-btn-text">Settings</span></button>
+                        <button id="tw-reset-btn" type="button">🗑️ <span class="tw-btn-text">Reset Data</span></button>
                         <span class="tw-close" id="tw-close-modal">&times;</span>
                     </div>
                 </div>
@@ -1095,7 +1106,7 @@ nction getVillageTooltipHtml(v) {
                         <div id="tw-village-list"></div>
                     </div>
                     <div class="tw-canvas-container" id="tw-canvas-container">
-                        <button id="tw-add-custom-btn" type="button">➕ Add Marker</button>
+                        <button id="tw-add-custom-btn" type="button">➕ <span class="tw-btn-text">Add Marker</span></button>
 
                         <div id="tw-zoom-controls" style="
                             position: absolute; top: 12px; right: 12px; z-index: 10000;
@@ -1104,75 +1115,6 @@ nction getVillageTooltipHtml(v) {
                             <button class="tw-zoom-btn" id="tw-zoom-in" type="button" title="Zoom In">➕</button>
                             <button class="tw-zoom-btn" id="tw-zoom-out" type="button" title="Zoom Out">➖</button>
                             <button class="tw-zoom-btn" id="tw-zoom-reset" type="button" title="Reset View">🎯</button>
-                        </div>
-
-                        <div class="tw-settings-popover" id="tw-settings-popover">
-                            <h4>⚙️ Map & Gist Settings</h4>
-                            <label>Center Zone Radius:</label>
-                            <input type="number" id="tw-zone-radius-input" placeholder="14" min="0" step="1" />
-                            <label>GitHub Gist ID:</label>
-                            <input type="text" id="tw-gist-id-input" placeholder="e.g. 8a7f2b9c0d1e2f3a4b5c" />
-                            <label>GitHub Access Token (Key):</label>
-                            <input type="password" id="tw-gist-key-input" placeholder="ghp_x1y2z3..." />
-                            <div id="tw-gist-conn-status" style="margin: 4px 0 10px 0; font-size: 11px; color: #aaa;">Status: Not Configured</div>
-                            <div class="tw-popover-btns">
-                                <button type="button" id="tw-settings-cancel-btn" style="background:#555; color:#fff;">Cancel</button>
-                                <button type="button" id="tw-settings-save-btn" style="background:#28a745; color:#fff;">Save & Sync</button>
-                            </div>
-                        </div>
-
-                        <div class="tw-village-popover" id="tw-village-popover">
-                            <h4 id="tw-village-popover-title">Village Resource Targets</h4>
-                            <div id="tw-village-net-info" style="margin-bottom:12px;"></div>
-
-                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
-                                <div>
-                                    <label>🌲 Wood Target (/h):</label>
-                                    <input type="number" id="tw-village-req-wood" placeholder="e.g. 4834" />
-                                </div>
-                                <div>
-                                    <label>🧱 Clay Target (/h):</label>
-                                    <input type="number" id="tw-village-req-clay" placeholder="e.g. 6274" />
-                                </div>
-                                <div>
-                                    <label>⛏️ Iron Target (/h):</label>
-                                    <input type="number" id="tw-village-req-iron" placeholder="e.g. 7714" />
-                                </div>
-                                <div>
-                                    <label>🥩 Crop Target (/h):</label>
-                                    <input type="number" id="tw-village-req-crop" placeholder="e.g. 3394" />
-                                </div>
-                            </div>
-
-                            <div class="tw-popover-btns">
-                                <button type="button" id="tw-village-tile-btn" style="background:#165eb9; color:#fff;">View Tile</button>
-                                <button type="button" id="tw-village-cancel-btn" style="background:#555; color:#fff;">Cancel</button>
-                                <button type="button" id="tw-village-save-btn" style="background:#28a745; color:#fff;">Save</button>
-                            </div>
-                        </div>
-
-                        <div class="tw-add-modal-popover" id="tw-add-modal-popover">
-                            <strong style="display:block; margin-bottom:8px; color:#fff;">Add Custom Map Marker</strong>
-                            <div style="display:flex; gap:6px;">
-                                <div style="flex:1;">
-                                    <label>X Coord:</label>
-                                    <input type="number" id="tw-new-x" placeholder="e.g. -15" />
-                                </div>
-                                <div style="flex:1;">
-                                    <label>Y Coord:</label>
-                                    <input type="number" id="tw-new-y" placeholder="e.g. -39" />
-                                </div>
-                            </div>
-                            <label>Header / Title:</label>
-                            <input type="text" id="tw-new-title" placeholder="Outpost / Target" />
-                            <label>Note / Description:</label>
-                            <textarea id="tw-new-note" rows="2" placeholder="Optional details..."></textarea>
-                            <label>Marker Color:</label>
-                            <input type="color" id="tw-new-color" value="#ff007f" />
-                            <div class="tw-popover-btns">
-                                <button type="button" id="tw-cancel-marker-btn" style="background:#555; color:#fff;">Cancel</button>
-                                <button type="button" id="tw-save-marker-btn" style="background:#28a745; color:#fff;">Save</button>
-                            </div>
                         </div>
 
                         <svg id="tw-svg" width="100%" height="100%"></svg>
@@ -1193,6 +1135,76 @@ nction getVillageTooltipHtml(v) {
                             <div class="tw-legend-item"><span class="tw-legend-color" style="background:#f43f5e; border-radius: 2px;"></span> Food</div>
                         </div>
                     </div>
+
+                    <div class="tw-settings-popover" id="tw-settings-popover">
+                        <h4>⚙️ Map & Gist Settings</h4>
+                        <label>Center Zone Radius:</label>
+                        <input type="number" id="tw-zone-radius-input" placeholder="14" min="0" step="1" />
+                        <label>GitHub Gist ID:</label>
+                        <input type="text" id="tw-gist-id-input" placeholder="e.g. 8a7f2b9c0d1e2f3a4b5c" />
+                        <label>GitHub Access Token (Key):</label>
+                        <input type="password" id="tw-gist-key-input" placeholder="ghp_x1y2z3..." />
+                        <div id="tw-gist-conn-status" style="margin: 4px 0 10px 0; font-size: 11px; color: #aaa;">Status: Not Configured</div>
+                        <div class="tw-popover-btns">
+                            <button type="button" id="tw-settings-cancel-btn" style="background:#555; color:#fff;">Cancel</button>
+                            <button type="button" id="tw-settings-save-btn" style="background:#28a745; color:#fff;">Save & Sync</button>
+                        </div>
+                    </div>
+
+                    <div class="tw-village-popover" id="tw-village-popover">
+                        <h4 id="tw-village-popover-title">Village Resource Targets</h4>
+                        <div id="tw-village-net-info" style="margin-bottom:12px;"></div>
+
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                            <div>
+                                <label>🌲 Wood Target (/h):</label>
+                                <input type="number" id="tw-village-req-wood" placeholder="e.g. 4834" />
+                            </div>
+                            <div>
+                                <label>🧱 Clay Target (/h):</label>
+                                <input type="number" id="tw-village-req-clay" placeholder="e.g. 6274" />
+                            </div>
+                            <div>
+                                <label>⛏️ Iron Target (/h):</label>
+                                <input type="number" id="tw-village-req-iron" placeholder="e.g. 7714" />
+                            </div>
+                            <div>
+                                <label>🥩 Crop Target (/h):</label>
+                                <input type="number" id="tw-village-req-crop" placeholder="e.g. 3394" />
+                            </div>
+                        </div>
+
+                        <div class="tw-popover-btns">
+                            <button type="button" id="tw-village-tile-btn" style="background:#165eb9; color:#fff;">View Tile</button>
+                            <button type="button" id="tw-village-cancel-btn" style="background:#555; color:#fff;">Cancel</button>
+                            <button type="button" id="tw-village-save-btn" style="background:#28a745; color:#fff;">Save</button>
+                        </div>
+                    </div>
+
+                    <div class="tw-add-modal-popover" id="tw-add-modal-popover">
+                        <strong style="display:block; margin-bottom:8px; color:#fff;">Add Custom Map Marker</strong>
+                        <div style="display:flex; gap:6px;">
+                            <div style="flex:1;">
+                                <label>X Coord:</label>
+                                <input type="number" id="tw-new-x" placeholder="e.g. -15" />
+                            </div>
+                            <div style="flex:1;">
+                                <label>Y Coord:</label>
+                                <input type="number" id="tw-new-y" placeholder="e.g. -39" />
+                            </div>
+                        </div>
+                        <label>Header / Title:</label>
+                        <input type="text" id="tw-new-title" placeholder="Outpost / Target" />
+                        <label>Note / Description:</label>
+                        <textarea id="tw-new-note" rows="2" placeholder="Optional details..."></textarea>
+                        <label>Marker Color:</label>
+                        <input type="color" id="tw-new-color" value="#ff007f" />
+                        <div class="tw-popover-btns">
+                            <button type="button" id="tw-cancel-marker-btn" style="background:#555; color:#fff;">Cancel</button>
+                            <button type="button" id="tw-save-marker-btn" style="background:#28a745; color:#fff;">Save</button>
+                        </div>
+                    </div>
+
                 </div>
                 <div class="tw-tooltip" id="tw-tooltip"></div>
             </div>
@@ -1429,7 +1441,6 @@ nction getVillageTooltipHtml(v) {
         const targetNode = document.querySelector('main') || document.querySelector('#app') || document.body;
 
         const observer = new MutationObserver((mutations) => {
-            // Guard: ignore DOM mutations originating from script's own UI elements
             const isSelfMutation = mutations.every(m => {
                 const target = m.target;
                 return target.closest && (
@@ -1447,20 +1458,12 @@ nction getVillageTooltipHtml(v) {
                 injectHeaderButton();
                 injectTradeRouteControls();
 
-                const selectEl = document.querySelector('header [role="combobox"] span') || document.querySelector('header select option:checked');
-                if (selectEl) {
-                    const currentText = selectEl.textContent.trim();
-                    if (currentText !== lastObservedVillage) {
-                        lastObservedVillage = currentText;
-                        lastParsedRouteSig = '';
-                        scrapePageVillageData();
-                    }
-                }
+                // Trigger 350ms settling/cancellation pipeline for village switching
+                scrapePageVillageData();
 
                 if (findTradeRoutesHeader()) {
                     const parsedCount = scrapeTradeRoutesFromDOM();
                     updateRouteStatusBadge(parsedCount);
-                    render();
                 }
             }, 250);
         });
@@ -1473,40 +1476,19 @@ nction getVillageTooltipHtml(v) {
     }
 
     function injectHeaderButton() {
-        if (document.getElementById('tw-graph-btn')) return;
-
-        const selectEl = document.querySelector('header [role="combobox"] span') || document.querySelector('header select option:checked');
-        let targetEl = null;
-
-        if (selectEl) {
-            targetEl = selectEl.closest('.relative.flex.min-w-0') || selectEl.closest('.relative.w-fit')?.parentElement;
-        }
-
-        if (!targetEl) {
-            const candidates = document.querySelectorAll('header div, header span, header h1, header h2, header button');
-            for (const el of candidates) {
-                if (el.children.length <= 3 && /\([-+]?\d+\|[-+]?\d+\)/.test(el.textContent)) {
-                    targetEl = el;
-                    break;
-                }
-            }
-        }
-
-        if (targetEl) {
-            const btn = document.createElement('button');
-            btn.id = 'tw-graph-btn';
-            btn.innerHTML = isMobile(window) ? 'TG' : 'Trade Graph';
-            btn.onclick = (e) => {
-                e.stopPropagation();
+        registerHeaderTool({
+            id: 'trade-graph',
+            label: 'Trade Graph',
+            mobileIcon: '🗺️',
+            onClick: (e) => {
                 scrapePageVillageData();
                 const parsedCount = scrapeTradeRoutesFromDOM();
                 updateRouteStatusBadge(parsedCount);
                 document.getElementById('tw-modal-overlay').style.display = 'flex';
                 render();
                 syncGist(false);
-            };
-            targetEl.appendChild(btn);
-        }
+            }
+        });
     }
 
     function formatResourceTooltipLine(icon, name, base, inc, out, target) {
@@ -1585,9 +1567,20 @@ nction getVillageTooltipHtml(v) {
 
         if (overlay && overlay.style.display === 'none') return;
 
-        const villages = Object.values(state.villages);
+        const allVillages = Object.values(state.villages);
         const routes = state.routes;
         const customItems = state.customItems || [];
+
+        // Hide inactive/unknown villages that have 0 base income and no trade routes
+        const villages = allVillages.filter(v => {
+            const baseTotal = (v.wood || 0) + (v.clay || 0) + (v.iron || 0) + (v.crop || 0);
+            const hasRoute = routes.some(r => (r.fromX === v.x && r.fromY === v.y) || (r.toX === v.x && r.toY === v.y));
+            if (baseTotal === 0 && !hasRoute) {
+                return false;
+            }
+            return true;
+        });
+
         const svg = document.getElementById('tw-svg');
         const container = document.getElementById('tw-canvas-container');
         const sidebarList = document.getElementById('tw-village-list');
@@ -1702,8 +1695,12 @@ nction getVillageTooltipHtml(v) {
         viewportElement.appendChild(nodesGroupElement);
 
         const routeDomMap = new Map();
+        let activeHighlightedRouteId = null;
 
-        function activateRouteHighlight(path, arrow) {
+        function activateRouteHighlight(path, arrow, routeId) {
+            if (activeHighlightedRouteId === routeId) return;
+            activeHighlightedRouteId = routeId;
+
             routesGroupElement.querySelectorAll('.tw-route-path, .tw-route-arrow').forEach(p => p.style.opacity = '0.2');
             path.style.opacity = '1';
             path.setAttribute('stroke-width', '5');
@@ -1711,6 +1708,9 @@ nction getVillageTooltipHtml(v) {
         }
 
         function deactivateRouteHighlight() {
+            if (!activeHighlightedRouteId) return;
+            activeHighlightedRouteId = null;
+
             routesGroupElement.querySelectorAll('.tw-route-path, .tw-route-arrow').forEach(p => {
                 p.style.opacity = '1';
                 if (p.classList.contains('tw-route-path')) {
@@ -1755,7 +1755,15 @@ nction getVillageTooltipHtml(v) {
             path.setAttribute('stroke-width', '3');
             path.setAttribute('fill', 'none');
             path.setAttribute('class', 'tw-route-path');
-            path.style.cursor = 'pointer';
+            path.style.pointerEvents = 'none';
+
+            const hitPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            hitPath.setAttribute('d', `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`);
+            hitPath.setAttribute('stroke', 'transparent');
+            hitPath.setAttribute('stroke-width', '16');
+            hitPath.setAttribute('fill', 'none');
+            hitPath.style.cursor = 'pointer';
+            hitPath.style.pointerEvents = 'stroke';
 
             const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
             arrow.setAttribute('points', '-7,-5 6,0 -7,5');
@@ -1767,15 +1775,26 @@ nction getVillageTooltipHtml(v) {
             arrow.setAttribute('transform', `translate(${mx}, ${my}) rotate(${arrowAngle}) scale(${invScale})`);
             arrow.style.pointerEvents = 'none';
 
-            path.onmousemove = (e) => {
+            hitPath.onmouseenter = (e) => {
                 if (!transformState.isDragging) {
-                    activateRouteHighlight(path, arrow);
+                    activateRouteHighlight(path, arrow, r.id);
                     showTooltip(getRouteTooltipHtml(r), e);
                 }
             };
-            path.onmouseleave = () => deactivateRouteHighlight();
+            hitPath.onmousemove = (e) => {
+                if (!transformState.isDragging) {
+                    if (activeHighlightedRouteId !== r.id) {
+                        activateRouteHighlight(path, arrow, r.id);
+                    }
+                    showTooltip(getRouteTooltipHtml(r), e);
+                }
+            };
+            hitPath.onmouseleave = () => {
+                deactivateRouteHighlight();
+            };
 
             routesGroupElement.appendChild(path);
+            routesGroupElement.appendChild(hitPath);
             routesGroupElement.appendChild(arrow);
 
             routeDomMap.set(r.id, { route: r, path: path, arrow: arrow });
@@ -1970,11 +1989,17 @@ nction getVillageTooltipHtml(v) {
             sortedRoutes.forEach(r => {
                 const fromName = getVillageName(r.fromX, r.fromY);
                 const toName = r.destName || getVillageName(r.toX, r.toY);
+                const routeColor = getRouteColor(r);
 
                 const div = document.createElement('div');
                 div.className = 'tw-list-item';
                 div.style.cursor = 'pointer';
-                div.innerHTML = `<span>🛤️ ${fromName} → ${toName}</span>`;
+                div.innerHTML = `
+                    <span>
+                        <span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:${routeColor}; margin-right:6px;"></span>
+                        ${fromName} → ${toName}
+                    </span>
+                `;
 
                 const domRef = routeDomMap.get(r.id);
                 const sidebarRId = `sidebar_r_${r.id}`;
@@ -1984,7 +2009,7 @@ nction getVillageTooltipHtml(v) {
                     sidebarRId,
                     null,
                     () => getRouteTooltipHtml(r),
-                    () => { if (domRef) activateRouteHighlight(domRef.path, domRef.arrow); },
+                    () => { if (domRef) activateRouteHighlight(domRef.path, domRef.arrow, r.id); },
                     deactivateRouteHighlight
                 );
 
